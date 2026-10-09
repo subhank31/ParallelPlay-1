@@ -162,12 +162,14 @@
       duration: remote && remote.duration,
       rate: remote && remote.rate
     };
+    // A Slave already stopped at 00:00 needs no stop to match an idle Master.
+    const needsStop = !!(local && local.path && local.status !== 'stopped' && local.status !== 'idle');
     if (remote && remote.idle === true) {
-      return { ok: true, commands: local && local.path ? [{ type: 'stop' }] : [] };
+      return { ok: true, commands: needsStop ? [{ type: 'stop' }] : [] };
     }
     const viewed = describeRecovery(remoteState);
     if (!viewed.ok) return { ok: false, reason: viewed.reason };
-    if (viewed.idle) return { ok: true, commands: local && local.path ? [{ type: 'stop' }] : [] };
+    if (viewed.idle) return { ok: true, commands: needsStop ? [{ type: 'stop' }] : [] };
     const commands = [];
     const same = !!(local && sameMedia(local.path, viewed.path));
     if (!same) commands.push({ type: 'load', path: viewed.path });

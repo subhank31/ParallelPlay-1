@@ -735,6 +735,9 @@
       return true;
     }
 
+    /** Increments on Play, Pause, Stop, and selection; a Play checks it before starting. */
+    let transportGeneration = 0;
+
     function slaveHasCurrentMedia(file) {
       if (!file || !linkSnapshot || linkSnapshot.connection !== 'connected') return false;
       if (linkSnapshot.slaveMediaStatus !== 'ready') return false;
@@ -1081,6 +1084,7 @@
       const player = localPlayer();
       const target = entryPath(currentPlaylistFiles[index]);
       if (!player || !target) return false;
+      transportGeneration += 1;
       const previousIndex = currentFileIndex;
       selectIndex(index);
       try {
@@ -1957,23 +1961,29 @@
       recoveryError = '';
       const player = localPlayer();
       if (!player) return;
+      // Stop, Pause, or a new selection while this Play is still waiting on
+      // the Slave or fullscreen cancels it, so it can never start afterwards.
+      const generation = ++transportGeneration;
+      const stale = () => generation !== transportGeneration;
       try {
         const startedIndex = currentFileIndex;
         const before = await player.getState();
-        if (currentFileIndex !== startedIndex) return;
+        if (stale() || currentFileIndex !== startedIndex) return;
         const position = before && before.state && Number.isFinite(before.state.position) ? before.state.position : null;
         const entry = currentPlaylistFiles[currentFileIndex];
         const file = entryPath(entry);
         const type = entry && typeof entry === 'object' && entry.type
           ? entry.type
           : mediaTypeOf(file);
-        if (file && linkSnapshot && linkSnapshot.role === 'master' && linkSnapshot.paired) {
+        if (file && linkSnapshot && linkSnapshot.role === 'master' && linkSnapshot.paired && !slaveHasCurrentMedia(file)) {
           await mirrorLoadIfMaster(file);
+          if (stale()) return;
         }
         if (window.PlaylistUI.fullscreenAvailable(type)) {
           const already = before && before.state && before.state.fullscreen === true;
           if (!already) {
             const full = await player.fullscreen(true);
+            if (stale()) return;
             if (!full || full.ok === false) {
               showPlayerResult(full, '');
               return;
@@ -1981,9 +1991,9 @@
           }
           await mirrorIfMaster('fullscreen', { enabled: true });
         }
-        if (currentFileIndex !== startedIndex) return;
+        if (stale() || currentFileIndex !== startedIndex) return;
         const result = await player.play();
-        if (currentFileIndex !== startedIndex) return;
+        if (stale() || currentFileIndex !== startedIndex) return;
         if (showPlayerResult(result, 'Playing.')) {
           const payload = { state: 'playing' };
           if (position != null) payload.position = position;
@@ -1996,20 +2006,22 @@
 
     async function pauseFile() {
       recoveryError = '';
+      transportGeneration += 1;
       const player = localPlayer();
       if (!player) return;
+      let position = null;
       try {
         const before = await player.getState();
-        const position = before && before.state && Number.isFinite(before.state.position) ? before.state.position : null;
+        position = before && before.state && Number.isFinite(before.state.position) ? before.state.position : null;
         const result = await player.pause();
-        if (showPlayerResult(result, 'Paused.')) {
-          const payload = { state: 'paused' };
-          if (position != null) payload.position = position;
-          await mirrorIfMaster('pause', payload);
-        }
+        showPlayerResult(result, 'Paused.');
       } catch (err) {
         showResponse('Pause failed.', 'error', err.message);
       }
+      // Mirror even if the local pause failed: the operator wants both paused.
+      const payload = { state: 'paused' };
+      if (position != null) payload.position = position;
+      await mirrorIfMaster('pause', payload);
     }
 
     async function openSlaveApp() {
@@ -2037,14 +2049,15 @@
       recoveryError = '';
       const player = localPlayer();
       if (!player) return;
+      transportGeneration += 1;
       try {
         const result = await player.stop();
-        if (showPlayerResult(result, 'Stopped at 00:00. Play starts this item from the beginning.')) {
-          await mirrorIfMaster('stop', {});
-        }
+        showPlayerResult(result, 'Stopped at 00:00. Play starts this item from the beginning.');
       } catch (err) {
         showResponse('Stop failed.', 'error', err.message);
       }
+      // Mirror even if the local stop failed: the operator wants both stopped.
+      await mirrorIfMaster('stop', {});
     }
   </script>
 </body>

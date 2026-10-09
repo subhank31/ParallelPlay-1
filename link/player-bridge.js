@@ -45,6 +45,16 @@ function playerFailure(result) {
   };
 }
 
+/**
+ * A later Stop or Pause from the Master has overtaken this command. It is
+ * answered as done without touching the player, so it cannot run late.
+ */
+function overtaken(context) {
+  return !!(context && typeof context.isCurrent === 'function' && !context.isCurrent());
+}
+
+const SUPERSEDED = { ok: true, payload: { superseded: true } };
+
 async function playerResult(player, type, fields, timeoutMs) {
   const result = await player.send(type, fields, timeoutMs);
   if (!result || result.ok === false) return playerFailure(result);
@@ -119,9 +129,10 @@ async function execute(player, command, context = {}) {
     if (problem) return { ok: false, error: { code: 'INVALID_ARGUMENT', message: problem } };
     const identity = await confirmMedia(player, payload, context);
     if (!identity.ok) return identity;
+    if (overtaken(context)) return SUPERSEDED;
     const sought = await playerResult(player, 'seek', { seconds: Number(payload.seconds) }, 15000);
     if (!sought.ok) return sought;
-    return holdPlaybackState(player, payload.state, source, sought, payload.mediaPath);
+    return holdPlaybackState(player, payload.state, source, sought, payload.mediaPath, context);
   }
 
   if (command.type === 'setRate') {
@@ -136,18 +147,26 @@ async function execute(player, command, context = {}) {
   }
 
   if (command.type === 'play') {
+    if (overtaken(context)) return SUPERSEDED;
     const prepared = await prepareTransport(player, payload, context);
     if (!prepared.ok) return prepared;
     // Video enters fullscreen before playback. Audio never does.
     // An already-fullscreen window is left alone.
     await enterFullscreenForVideo(player, source, payload.mediaPath);
+    if (overtaken(context)) return SUPERSEDED;
     return playerResult(player, 'play', {}, 15000);
   }
 
   if (command.type === 'pause') {
     const prepared = await prepareTransport(player, payload, context);
     if (!prepared.ok) return prepared;
+    if (overtaken(context)) return SUPERSEDED;
     return playerResult(player, 'pause', {}, 15000);
+  }
+
+  if (command.type === 'stop') {
+    if (overtaken(context)) return SUPERSEDED;
+    return playerResult(player, 'stop', {}, 15000);
   }
 
   if (command.type === 'openApp') {
@@ -259,13 +278,15 @@ async function prepareTransport(player, payload, context) {
   if (delta <= toleranceSeconds(context)) {
     return { ok: true, sought: false, status: current.status };
   }
+  if (overtaken(context)) return { ok: true, sought: false, status: current.status };
   const sought = await playerResult(player, 'seek', { seconds: target }, 15000);
   if (!sought.ok) return sought;
   return { ok: true, sought: true, status: sought.payload.status };
 }
 
-async function holdPlaybackState(player, state, source, currentResult, mediaPath) {
+async function holdPlaybackState(player, state, source, currentResult, mediaPath, context) {
   if (state !== 'playing' && state !== 'paused') return currentResult;
+  if (overtaken(context)) return currentResult;
   const status = currentResult.payload && currentResult.payload.status;
   const now = status && status.state;
   if (state === 'paused') {

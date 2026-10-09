@@ -5,6 +5,7 @@ const path = require('path');
 const PlaylistUI = require('../playlist-ui');
 const { execute } = require('../link/player-bridge');
 const { RecordingPlayer } = require('../link/recording-player');
+const testVideo = process.env.PLAYOUT_TEST_VIDEO || '/Users/subhank/Desktop/Finals/Sub 1.mp4';
 
 const results = [];
 
@@ -251,7 +252,7 @@ async function ui() {
         }
       });
       const audioPath = ${JSON.stringify('/tmp/pp-play-order.wav')};
-      const videoPath = ${JSON.stringify('/Users/subhank/Desktop/Finals/Sub 1.mp4')};
+      const videoPath = ${JSON.stringify(testVideo)};
       const audioLoaded = await window.electronAPI.player.load(audioPath);
       currentPlaylistFiles = [{ path: audioPath, name: 'tone.wav', type: 'audio', duration: 1 }];
       currentFileIndex = 0;
@@ -344,7 +345,7 @@ async function ui() {
       currentPlaylistFiles = [
         { path: '/tmp/pp-item-a.wav', name: 'a.wav', type: 'audio', duration: 0.1 },
         { path: '/tmp/pp-item-b.wav', name: 'b.wav', type: 'audio', duration: 0.1 },
-        { path: ${JSON.stringify('/Users/subhank/Desktop/Finals/Sub 1.mp4')}, name: 'Sub 1.mp4', type: 'video', duration: 20 }
+        { path: ${JSON.stringify(testVideo)}, name: 'Sub 1.mp4', type: 'video', duration: 20 }
       ];
       selectIndex(0);
       const first = readUi();

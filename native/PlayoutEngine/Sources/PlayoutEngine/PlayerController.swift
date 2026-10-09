@@ -55,6 +55,10 @@ final class PlayerController: NSObject, NSWindowDelegate {
     private var displayIndex: Int = 0
     private var fullscreen = false
     private var loadCompletion: ((String?) -> Void)?
+    /// Increments on every load so an older load's async work never attaches.
+    private var loadGeneration = 0
+    /// Stop or Pause received while loading: the state to settle in once ready.
+    private var settleAfterLoad: Transport?
     private var endObserver: NSObjectProtocol?
     private var failedObserver: NSObjectProtocol?
     private var timeObserver: Any?
@@ -62,6 +66,8 @@ final class PlayerController: NSObject, NSWindowDelegate {
     private struct DeferredAfterLoad {
         let run: () -> Void
         let fail: (String) -> Void
+        /// Starts playback (play, scheduledPlay). Pause drops these; Stop drops all.
+        let starts: Bool
     }
     private var pendingAfterLoad: [DeferredAfterLoad] = []
     private var wantsFullscreen: Bool?
@@ -275,6 +281,9 @@ final class PlayerController: NSObject, NSWindowDelegate {
         loadCompletion?( "Load was replaced by a newer load request.")
         loadCompletion = completion
         failPending("The command was replaced by a newer load request.")
+        loadGeneration += 1
+        let generation = loadGeneration
+        settleAfterLoad = nil
         status = .loading
         loadedPath = path
         knownDuration = nil
@@ -289,7 +298,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
                 let playable = try await asset.load(.isPlayable)
                 let duration = try await asset.load(.duration)
                 await MainActor.run {
-                    guard self.loadedPath == path else { return }
+                    guard self.loadGeneration == generation else { return }
                     if !playable {
                         self.finishLoad("Unable to play this file. The selected media format or codec is not supported.")
                         return
@@ -298,7 +307,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
                 }
             } catch {
                 await MainActor.run {
-                    guard self.loadedPath == path else { return }
+                    guard self.loadGeneration == generation else { return }
                     self.finishLoad(error.localizedDescription)
                 }
             }
@@ -342,6 +351,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
     }
 
     private func attach(asset: AVURLAsset, duration: Double, path: String) {
+        removeItemObservers()
         let item = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: item)
         knownDuration = duration.isFinite ? duration : nil
@@ -392,9 +402,25 @@ final class PlayerController: NSObject, NSWindowDelegate {
         pending.forEach { $0.fail(reason) }
     }
 
-    private func deferUntilLoaded(run: @escaping () -> Void, fail: @escaping (String) -> Void) {
-        failPending("The command was replaced before the file finished loading.")
-        pendingAfterLoad = [DeferredAfterLoad(run: run, fail: fail)]
+    /// Commands sent while loading run in the order they arrived once the item is ready.
+    private func deferUntilLoaded(starts: Bool = false, run: @escaping () -> Void, fail: @escaping (String) -> Void) {
+        pendingAfterLoad.append(DeferredAfterLoad(run: run, fail: fail, starts: starts))
+    }
+
+    /// Stop or Pause while loading: answer now, drop commands queued before it,
+    /// and let the load finish into this state instead of waiting for it.
+    private func settleWhileLoading(_ state: Transport, reason: String) {
+        if state == .paused {
+            // Keep a queued seek: the Master's Pause sends its position first.
+            let dropped = pendingAfterLoad.filter { $0.starts }
+            pendingAfterLoad = pendingAfterLoad.filter { !$0.starts }
+            dropped.forEach { $0.fail(reason) }
+        } else {
+            failPending(reason)
+        }
+        settleAfterLoad = state
+        player.pause()
+        refreshCursor()
     }
 
     private func finishLoad(_ error: String?) {
@@ -408,6 +434,11 @@ final class PlayerController: NSObject, NSWindowDelegate {
             failPending("The file could not be loaded.")
             return
         }
+        if let settle = settleAfterLoad {
+            settleAfterLoad = nil
+            status = settle
+            refreshCursor()
+        }
         let pending = pendingAfterLoad
         pendingAfterLoad = []
         completion?(nil)
@@ -415,11 +446,12 @@ final class PlayerController: NSObject, NSWindowDelegate {
     }
 
     private func play() -> String? {
-        guard player.currentItem != nil else { return "No file is loaded." }
         if status == .loading {
-            deferUntilLoaded(run: { [weak self] in _ = self?.play() }, fail: { _ in })
+            settleAfterLoad = nil
+            deferUntilLoaded(starts: true, run: { [weak self] in _ = self?.play() }, fail: { _ in })
             return nil
         }
+        guard player.currentItem != nil else { return "No file is loaded." }
         player.playImmediately(atRate: Float(desiredRate))
         status = .playing
         refreshCursor()
@@ -427,6 +459,10 @@ final class PlayerController: NSObject, NSWindowDelegate {
     }
 
     private func pause() -> String? {
+        if status == .loading {
+            settleWhileLoading(.paused, reason: "Paused before the file finished loading.")
+            return nil
+        }
         guard player.currentItem != nil else { return "No file is loaded." }
         player.pause()
         if status != .ended {
@@ -438,6 +474,12 @@ final class PlayerController: NSObject, NSWindowDelegate {
 
     /// Stops and returns the current item to 00:00. Pause does not seek.
     private func stop(completion: @escaping (String?) -> Void) {
+        if status == .loading {
+            // A freshly loaded item already starts at 00:00.
+            settleWhileLoading(.stopped, reason: "Stopped before the file finished loading.")
+            completion(nil)
+            return
+        }
         guard player.currentItem != nil else {
             completion("No file is loaded.")
             return
@@ -450,7 +492,11 @@ final class PlayerController: NSObject, NSWindowDelegate {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if !finished {
-                    completion("Stop could not return to the start.")
+                    // A newer seek or load interrupted the return to 0. Playback
+                    // is already paused, so Stop still succeeded; the newer
+                    // command decides the position.
+                    engineLog("stop: return to 0 interrupted by a newer command")
+                    completion(nil)
                     return
                 }
                 self.player.pause()
@@ -463,15 +509,15 @@ final class PlayerController: NSObject, NSWindowDelegate {
     }
 
     private func seek(to seconds: Double, completion: @escaping (String?) -> Void) {
-        guard player.currentItem != nil else {
-            completion("No file is loaded.")
-            return
-        }
         if status == .loading {
             deferUntilLoaded(
                 run: { [weak self] in self?.seek(to: seconds, completion: completion) },
                 fail: { reason in completion(reason) }
             )
+            return
+        }
+        guard player.currentItem != nil else {
+            completion("No file is loaded.")
             return
         }
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
@@ -547,7 +593,16 @@ final class PlayerController: NSObject, NSWindowDelegate {
             return
         }
         let work = DispatchWorkItem { [weak self] in
-            self?.finishFullscreenReply()
+            guard let self = self else { return }
+            // No enter/exit callback arrived (e.g. the window was ordered out).
+            // Clear the flag so later fullscreen commands are not ignored.
+            if self.fullscreenAnimating {
+                engineLog("fullscreen change did not complete; resetting")
+                self.fullscreenAnimating = false
+                self.fullscreen = self.window.styleMask.contains(.fullScreen)
+                self.wantsFullscreen = nil
+            }
+            self.finishFullscreenReply()
         }
         fullscreenTimeout = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
@@ -642,7 +697,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
     }
 
     private func scheduledPlay(seconds: Double?, rate: Double?, hostTime: Double?, completion: @escaping (String?) -> Void) {
-        guard player.currentItem != nil else {
+        guard player.currentItem != nil || status == .loading else {
             completion("No file is loaded.")
             return
         }
@@ -654,7 +709,9 @@ final class PlayerController: NSObject, NSWindowDelegate {
             desiredRate = rate
         }
         if status == .loading {
+            settleAfterLoad = nil
             deferUntilLoaded(
+                starts: true,
                 run: { [weak self] in
                     self?.scheduledPlay(seconds: seconds, rate: rate, hostTime: hostTime, completion: completion)
                 },
@@ -920,6 +977,24 @@ final class PlayerController: NSObject, NSWindowDelegate {
             self?.applyFullscreen()
             self?.refreshCursor()
         }
+    }
+
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        fullscreenAnimating = false
+        fullscreen = window.styleMask.contains(.fullScreen)
+        wantsFullscreen = nil
+        engineLog("fullscreen: failed to enter")
+        finishFullscreenReply()
+        emit(event: "fullscreen")
+    }
+
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        fullscreenAnimating = false
+        fullscreen = window.styleMask.contains(.fullScreen)
+        wantsFullscreen = nil
+        engineLog("fullscreen: failed to exit")
+        finishFullscreenReply()
+        emit(event: "fullscreen")
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {

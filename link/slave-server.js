@@ -16,6 +16,9 @@ const { monotonicNow, sharedNow, timeSyncPayloadError } = require('./clock-sync'
 const { CommandScheduler } = require('./scheduled-command');
 const { peerEndpoint, refreshPeer, previewBytes, localEndpoint, socketDiag } = require('./peer');
 
+/** Master commands that must not wait behind a slow load. */
+const PREEMPTING_COMMANDS = new Set(['stop', 'pause']);
+
 /**
  * Slave TCP server.
  *
@@ -47,6 +50,8 @@ class SlaveServer extends EventEmitter {
     this.port = null;
     this.lastExecution = null;
     this.queue = Promise.resolve();
+    this.priorityQueue = Promise.resolve();
+    this.transportEpoch = 0;
     this.authorizedDeviceId = null;
     this.openApp = openApp;
     this.trace = trace;
@@ -303,13 +308,27 @@ class SlaveServer extends EventEmitter {
           this._respondTimeSync(socket, parsed.message, receivedAt, receivedWall);
           return;
         }
-        this.queue = this.queue
-          .then(() => this._handleParsed(socket, parsed))
-          .catch((error) => {
-            const message = error && error.message ? error.message : String(error);
-            console.error(`[link] command failed from ${peerEndpoint(socket)}: ${message}`);
-            this.emit('connection-error', error);
-          });
+        // Stop and Pause from the active Master do not wait behind a slow
+        // load. They start a new transport epoch; play/seek/stop/pause that
+        // arrived earlier are skipped instead of running after them.
+        const preempts = parsed.ok && PREEMPTING_COMMANDS.has(parsed.message.type) &&
+          socket === this.client && this._isAuthorized(socket);
+        if (preempts) {
+          this.transportEpoch += 1;
+          if (this.scheduler) this.scheduler.cancel();
+        }
+        const epoch = this.transportEpoch;
+        const run = () => this._handleParsed(socket, parsed, epoch);
+        const onFailure = (error) => {
+          const message = error && error.message ? error.message : String(error);
+          console.error(`[link] command failed from ${peerEndpoint(socket)}: ${message}`);
+          this.emit('connection-error', error);
+        };
+        if (preempts) {
+          this.priorityQueue = this.priorityQueue.then(run).catch(onFailure);
+        } else {
+          this.queue = this.queue.then(run).catch(onFailure);
+        }
       } catch (error) {
         console.error(`[link] could not handle a message from ${socket.remoteHost || 'unknown'}: ${error && error.message ? error.message : error}`);
         this.emit('connection-error', error);
@@ -421,7 +440,7 @@ class SlaveServer extends EventEmitter {
     this._write(socket, success(message.requestId, result.payload));
   }
 
-  async _handleParsed(socket, parsed) {
+  async _handleParsed(socket, parsed, epoch = this.transportEpoch) {
     if (!parsed.ok) {
       const requestId = parsed.requestId || null;
       this._write(socket, parsed.type === 'response' ? parsed : failure(requestId, parsed.code, parsed.message));
@@ -491,7 +510,8 @@ class SlaveServer extends EventEmitter {
     try {
       const result = await execute(this.player, message, {
         mediaRoot: this.mediaRoot(),
-        openApp: this.openApp
+        openApp: this.openApp,
+        isCurrent: () => this.transportEpoch === epoch
       });
       if (result.ok) {
         this._write(socket, success(message.requestId, result.payload));
