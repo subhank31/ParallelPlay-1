@@ -1662,7 +1662,9 @@
       if (firewallBanner) {
         const fw = snapshot.role === 'slave' ? snapshot.firewall : null;
         let fwText = '';
-        if (fw && fw.blocked) {
+        if (fw && fw.enabled && fw.signed === false) {
+          fwText = 'This copy of Parallel Playout is not code signed, so macOS Firewall drops every connection from the Master, even if Parallel Playout is set to Allow. Install a signed build of Parallel Playout on this Mac.';
+        } else if (fw && fw.blocked) {
           fwText = 'macOS Firewall is blocking connections to Parallel Playout, so the Master cannot connect. Open System Settings › Network › Firewall › Options and set Parallel Playout to Allow incoming connections.';
         } else if (fw && fw.enabled && !fw.listed) {
           fwText = 'macOS Firewall has not approved Parallel Playout yet. When macOS asks whether Parallel Playout may accept incoming connections, choose Allow, or add it in System Settings › Network › Firewall › Options.';

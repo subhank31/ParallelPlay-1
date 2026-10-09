@@ -11,7 +11,6 @@ const { DEFAULT_PORT } = require('./config-store');
 const { masterSessionPayload, resolveSessionFile } = require('./session-state');
 const { reconcileCommands, mediaTypeFromPath } = require('../playlist-ui');
 const { ConnectionTrace } = require('./connection-trace');
-const { allowFirewall } = require('./firewall');
 
 class LinkController extends EventEmitter {
   constructor(player, options = {}) {
@@ -400,16 +399,16 @@ class LinkController extends EventEmitter {
     if (!this.checkFirewall) return;
     Promise.resolve()
       .then(() => this.checkFirewall())
-      .then(async (state) => {
-        const bundle = state && state.appPath;
-        if (bundle && state.enabled) {
-          const allowed = await allowFirewall(bundle);
-          this.firewall = allowed || state;
-          if (this.firewall.blocked || !this.firewall.listed) {
-            console.error('[link] macOS Firewall still blocks incoming connections for this app');
-          }
-        } else {
-          this.firewall = state || null;
+      .then((state) => {
+        this.firewall = state || null;
+        if (state && state.enabled && !state.signed) {
+          console.error(
+            `[link] ${state.appPath} is not code signed; macOS Firewall drops every incoming connection to it. Install a signed build.`
+          );
+        } else if (state && (state.blocked || (state.enabled && !state.listed))) {
+          console.error(
+            `[link] macOS Firewall ${state.blocked ? 'blocks' : 'has not approved'} incoming connections for this app`
+          );
         }
         this.emit('event', Object.assign({ event: 'state' }, this.snapshot()));
       })
@@ -583,6 +582,7 @@ class LinkController extends EventEmitter {
           `On the Slave Mac (${host}), open ~/Library/Application Support/Parallel Playout/logs/parallel-playout.log ` +
           `while you click Request Connection. Look for: connection from ${masterLan}. ` +
           'If that line is missing, macOS Firewall (or another filter) dropped the connection before Parallel Playout saw it. ' +
+          'If it shows remote=unknown:? and read ENOTCONN, the Slave copy of Parallel Playout is not code signed, so macOS Firewall drops the connection; install a signed build there. ' +
           'If the line is present but ends with 0 bytes here, update Parallel Playout on the Slave to the latest build, ' +
           'confirm role Slave and Listening on port ' +
           port +

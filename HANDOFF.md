@@ -1,6 +1,26 @@
 # Parallel Playout — handoff
 
-This file is for the next engineer. The Master→Slave TCP handshake is **not fixed** on the Slave Mac. Do not treat a local test or a successful compile as success.
+This file is for the next engineer.
+
+## Resolution (9 Oct 2026)
+
+Both problems below are explained. The sections after this one are the original investigation notes.
+
+**Handshake failure: the Slave app was not code signed.** The installed build had only the linker's signature on its executable (`codesign -dv` showed `flags=0x20002(adhoc,linker-signed)`, `Info.plist=not bound`, `Sealed Resources=none`). macOS Application Firewall needs a designated requirement to apply its rules. Without one it drops every inbound flow, even though the app is listed as "Allow incoming connections". The unified log on 184 showed:
+
+```text
+socketfilterfw  … code object is not signed at all
+socketfilterfw  Designated requirement not obtained for flow, dropping flow
+kernel          CFIL: VERDICT DROP RECEIVED … lport 47631
+```
+
+After `codesign --force --deep --sign -` on the installed app and clicking Allow at the firewall prompt, 184 answered hello with `needsPairing` and logged `first bytes` from the Master.
+
+- The build signs ad-hoc (`"identity": "-"`). `scripts/verify-signature.js` runs as `afterSign` and fails the build if the bundle has no full signature or designated requirement.
+- An ad-hoc signature changes with every build, so macOS asks again whether to allow incoming connections after each new install on the Slave. Click Allow. To stop that, sign with a stable certificate (Developer ID, or a self-signed code-signing certificate) by setting `build.mac.identity` to its name.
+- The Slave UI now shows a banner, and the log says so, when the firewall is on and the app is not signed.
+
+**Restart every ~61 s: a LaunchAgent outside this repo.** `~/Library/LaunchAgents/com.srisathyasai.parallelplayout.slave.plist` on 184 (created 8 Oct 16:06) ran `killall -9 "Parallel Playout" PlayoutEngine; sleep 1; open -n -a …` every 60 s (`StartInterval 60`). SIGKILL is why no quit line was logged. Do not reinstall it.
 
 ## What the app is
 

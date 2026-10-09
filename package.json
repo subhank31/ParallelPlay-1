@@ -29,6 +29,7 @@
     "productName": "Parallel Playout",
     "asar": true,
     "npmRebuild": false,
+    "afterSign": "scripts/verify-signature.js",
     "directories": {
       "output": "dist"
     },
