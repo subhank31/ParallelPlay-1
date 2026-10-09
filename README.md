@@ -24,9 +24,9 @@ Sync clock measures the offset between the two machines. It does not start both 
 
 ## Layout
 
-| Path | Role |
-| --- | --- |
-| `main.js`, `preload.js`, `index.html` | Electron window and operator UI |
-| `player-session.js`, `player-ipc.js` | Local AVPlayer helper |
-| `native/PlayoutEngine/` | Swift AVPlayer process |
-| `link/` | Master/slave commands, pairing, clock estimate, scheduled play |
+| Path                                  | Role                                                           |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `main.js`, `preload.js`, `index.html` | Electron window and operator UI                                |
+| `player-session.js`, `player-ipc.js`  | Local AVPlayer helper                                          |
+| `native/PlayoutEngine/`               | Swift AVPlayer process                                         |
+| `link/`                               | Master/slave commands, pairing, clock estimate, scheduled play |

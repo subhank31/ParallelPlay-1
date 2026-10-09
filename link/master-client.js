@@ -94,8 +94,14 @@ class MasterClient extends EventEmitter {
         resolve(this.snapshot());
       });
       socket.on('error', (error) => {
+        const code = (error && error.code) || (error && error.message) || String(error);
+        const syscall = (error && error.syscall) || 'unknown-syscall';
+        console.error(
+          `[link] master socket error to ${host}:${this.port}: syscall=${syscall} code=${code} ` +
+          `readyState=${socket.readyState} destroyed=${!!socket.destroyed} readable=${socket.readable} writable=${socket.writable}`
+        );
         if (!settled && !socket._retired) {
-          if (this.trace) this.trace.fail('master_tcp_error', error.code || error.message);
+          if (this.trace) this.trace.fail('master_tcp_error', `${syscall} ${code}`);
           fail(error);
         }
       });

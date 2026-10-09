@@ -206,8 +206,11 @@ class SlaveServer extends EventEmitter {
     });
     socket.on('error', (error) => {
       const code = (error && error.code) || (error && error.message) || String(error);
-      if (!socket.closeReason) socket.closeReason = `socket error: ${code}`;
-      console.error(`[link] connection error from ${peerEndpoint(socket)}: ${code} (${socketDiag(socket)})`);
+      const syscall = (error && error.syscall) || 'unknown-syscall';
+      if (!socket.closeReason) socket.closeReason = `socket error: ${syscall} ${code}`;
+      console.error(
+        `[link] connection error from ${peerEndpoint(socket)}: syscall=${syscall} code=${code} (${socketDiag(socket)})`
+      );
     });
     socket.on('end', () => {
       if (!socket.closeReason) socket.closeReason = 'closed by the Master';
