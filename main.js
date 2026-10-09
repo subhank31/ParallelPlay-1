@@ -87,6 +87,11 @@ function migrateLegacyRole(store) {
   }
 }
 
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    console.error(`[app] received ${signal}`);
+  });
+}
 process.on('uncaughtException', (error) => {
   console.error(`[app] kept running after an error: ${error && error.stack ? error.stack : error}`);
 });
@@ -183,6 +188,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  console.error('[app] quit requested');
   if (quitting) return;
   event.preventDefault();
   quitting = true;

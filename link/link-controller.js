@@ -11,6 +11,7 @@ const { DEFAULT_PORT } = require('./config-store');
 const { masterSessionPayload, resolveSessionFile } = require('./session-state');
 const { reconcileCommands, mediaTypeFromPath } = require('../playlist-ui');
 const { ConnectionTrace } = require('./connection-trace');
+const { allowFirewall } = require('./firewall');
 
 class LinkController extends EventEmitter {
   constructor(player, options = {}) {
@@ -399,12 +400,16 @@ class LinkController extends EventEmitter {
     if (!this.checkFirewall) return;
     Promise.resolve()
       .then(() => this.checkFirewall())
-      .then((state) => {
-        this.firewall = state || null;
-        if (state && (state.blocked || (state.enabled && !state.listed))) {
-          console.error(
-            `[link] macOS Firewall ${state.blocked ? 'blocks' : 'has not approved'} incoming connections for this app`
-          );
+      .then(async (state) => {
+        const bundle = state && state.appPath;
+        if (bundle && state.enabled) {
+          const allowed = await allowFirewall(bundle);
+          this.firewall = allowed || state;
+          if (this.firewall.blocked || !this.firewall.listed) {
+            console.error('[link] macOS Firewall still blocks incoming connections for this app');
+          }
+        } else {
+          this.firewall = state || null;
         }
         this.emit('event', Object.assign({ event: 'state' }, this.snapshot()));
       })

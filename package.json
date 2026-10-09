@@ -70,9 +70,12 @@
           ]
         }
       ],
-      "identity": null,
+      "identity": "-",
       "gatekeeperAssess": false,
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Parallel Playout listens for the Master on the local network."
+      }
     },
     "dmg": {
       "title": "Parallel Playout",

@@ -20,7 +20,7 @@ async function checkFirewall(appPath) {
   if (process.platform !== 'darwin' || !appPath || !fs.existsSync(TOOL)) return null;
   const global = await run(['--getglobalstate']);
   const enabled = /State = [12]/.test(global) || /enabled/i.test(global);
-  if (!enabled) return { enabled: false, blocked: false, listed: false };
+  if (!enabled) return { enabled: false, blocked: false, listed: false, appPath };
   const [blockedText, listText] = await Promise.all([
     run(['--getappblocked', appPath]),
     run(['--listapps'])
@@ -28,8 +28,23 @@ async function checkFirewall(appPath) {
   return {
     enabled: true,
     blocked: /is blocked/i.test(blockedText),
-    listed: listText.indexOf(appPath) !== -1
+    listed: listText.indexOf(appPath) !== -1,
+    appPath
   };
 }
 
-module.exports = { checkFirewall };
+/**
+ * Path-based firewall rules do not follow an unsigned rebuild. Re-add the
+ * bundle on each listen so an inbound TCP socket stays connected long enough
+ * for the Master hello. Without this, macOS accepts the socket and the first
+ * read returns ENOTCONN with no peer address.
+ */
+async function allowFirewall(appPath) {
+  const state = await checkFirewall(appPath);
+  if (!state || !state.enabled) return state;
+  await run(['--add', appPath]);
+  await run(['--unblockapp', appPath]);
+  return checkFirewall(appPath);
+}
+
+module.exports = { checkFirewall, allowFirewall };
