@@ -299,11 +299,11 @@ class LinkController extends EventEmitter {
       if (!current()) return;
       this.pairingState = 'paired';
       this.emit('event', Object.assign({ event: 'authorized' }, this.snapshot()));
-      this.requestMasterSession().catch(() => {});
+      this.requestMasterSession({ reason: 'connect' }).catch(() => {});
     });
     server.on('session-sync', (payload) => {
       if (!current()) return;
-      this._applyMasterSession(payload).catch(() => {});
+      this._applyMasterSession(payload, { reason: 'push' }).catch(() => {});
     });
     server.on('unpaired', () => {
       if (!current()) return;
@@ -801,6 +801,11 @@ class LinkController extends EventEmitter {
       playAll: source.playAll === true,
       published: true
     };
+    // The UI publishes on every repaint. Only a changed playlist, index, or
+    // play-all goes to the Slave; transport travels as explicit commands.
+    const key = JSON.stringify([playlist, index, this.publishedSession.playAll]);
+    if (key === this._publishedKey) return { ok: true, unchanged: true };
+    this._publishedKey = key;
     if (this.role === 'master') {
       this._pushSessionToSlave().catch(() => {});
     }
@@ -843,13 +848,13 @@ class LinkController extends EventEmitter {
     }
     this.emit('event', { event: 'wake', state: playerState });
     if (this.role === 'slave') {
-      const session = await this.requestMasterSession();
+      const session = await this.requestMasterSession({ reason: 'wake' });
       return { ok: !session || session.ok !== false, state: playerState, session };
     }
     return { ok: true, state: playerState };
   }
 
-  async requestMasterSession() {
+  async requestMasterSession(options = {}) {
     if (this.role !== 'slave' || !this.server) {
       return { ok: false, error: { code: 'WRONG_ROLE', message: 'Only the slave requests the master session.' } };
     }
@@ -871,7 +876,7 @@ class LinkController extends EventEmitter {
       this.emit('event', { event: 'session-error', error: message, stop: false });
       return { ok: false, error: lastError || { code: 'STATE_UNAVAILABLE', message } };
     }
-    return this._applyMasterSession(response.payload);
+    return this._applyMasterSession(response.payload, options);
   }
 
   async _answerSlave(message) {
@@ -903,7 +908,44 @@ class LinkController extends EventEmitter {
     socket.write(encode(body));
   }
 
-  async _applyMasterSession(payload) {
+  /**
+   * Applies Master sessions one at a time. A newer push or connect snapshot
+   * replaces one still waiting; wake recovery is never skipped.
+   */
+  _applyMasterSession(payload, options = {}) {
+    const generation = (this._sessionGeneration = (this._sessionGeneration || 0) + 1);
+    const run = (this._sessionChain || Promise.resolve())
+      .catch(() => {})
+      .then(() => {
+        if (options.reason !== 'wake' && generation !== this._sessionGeneration) {
+          return { ok: true, superseded: true };
+        }
+        return this._applyMasterSessionNow(payload, options);
+      });
+    this._sessionChain = run;
+    return run;
+  }
+
+  /**
+   * Only wake recovery may correct a Slave that is already playing, paused,
+   * or loading. A Master that connects, reconnects, or restarts can only start
+   * an idle Slave; it never stops, seeks, or reloads one that is on air.
+   */
+  async _applyMasterSessionNow(payload, options = {}) {
+    const guarded = options.reason !== 'wake';
+    let local = null;
+    try {
+      const result = await this.player.send('getState', {}, 5000);
+      local = result && result.state ? result.state : null;
+    } catch (error) {
+      local = null;
+    }
+    const onAir = !!(local && local.path && ['playing', 'paused', 'loading'].includes(local.status));
+    const masterEmpty = !payload || !payload.item || !Array.isArray(payload.playlist) || payload.playlist.length === 0;
+    if (guarded && onAir && masterEmpty) {
+      console.error(`[link] kept Slave ${local.status} at ${Number(local.position || 0).toFixed(2)} s; Master has no session (${options.reason || 'connect'})`);
+      return { ok: true, kept: true };
+    }
     const mediaRoot = (this.config && this.config.data && this.config.data.mediaRoot) || '';
     const resolvedItems = [];
     for (const entry of payload.playlist || []) {
@@ -922,15 +964,12 @@ class LinkController extends EventEmitter {
       try { return fs.existsSync(filePath); } catch (error) { return false; }
     });
     if (!current.ok) {
+      if (guarded) {
+        this.emit('event', { event: 'session-error', error: current.reason, stop: false });
+        return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: current.reason } };
+      }
       await this._stopUnrecoverable(current.reason);
       return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: current.reason } };
-    }
-    let local = null;
-    try {
-      const result = await this.player.send('getState', {}, 5000);
-      local = result && result.state ? result.state : null;
-    } catch (error) {
-      local = null;
     }
     const remote = current.idle ? { idle: true } : {
       path: current.path,
@@ -939,8 +978,12 @@ class LinkController extends EventEmitter {
       duration: payload.duration,
       rate: payload.rate
     };
-    const plan = reconcileCommands(local, remote);
+    const plan = guarded && onAir ? { ok: true, commands: [] } : reconcileCommands(local, remote);
     if (!plan.ok) {
+      if (guarded) {
+        this.emit('event', { event: 'session-error', error: plan.reason, stop: false });
+        return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: plan.reason } };
+      }
       await this._stopUnrecoverable(plan.reason);
       return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: plan.reason } };
     }
@@ -958,6 +1001,11 @@ class LinkController extends EventEmitter {
       if (!result || result.ok === false) {
         const message = (result && result.error) || 'The slave player could not match the master.';
         if (command.type === 'stop' && /no file is loaded/i.test(String(message))) continue;
+        if (guarded) {
+          // A mirrored command may have taken over meanwhile; do not stop it.
+          this.emit('event', { event: 'session-error', error: String(message), stop: false });
+          return { ok: false, error: { code: 'PLAYER_ERROR', message } };
+        }
         await this._stopUnrecoverable(message);
         return { ok: false, error: { code: 'PLAYER_ERROR', message } };
       }

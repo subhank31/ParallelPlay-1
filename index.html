@@ -1443,11 +1443,10 @@
             if (event && event.event === 'execution') paintExecution(event);
             if (event && event.event === 'wake') recoverPlayback(event.state || null);
             if (event && event.event === 'session') applyAuthoritativeSession(event.session);
+            // On (re)connect the Master only publishes. Reloading the Slave here
+            // would interrupt it mid-playback; an idle Slave adopts the session.
             if (event && event.event === 'paired' && event.snapshot && event.snapshot.role === 'master') {
               publishSession();
-              const entry = currentPlaylistFiles[currentFileIndex];
-              const file = entry ? entryPath(entry) : '';
-              if (file) mirrorLoadIfMaster(file);
             }
             if (event && event.event === 'session-error') {
               if (event.stop) failRecovery(event.error);
