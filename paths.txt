@@ -1,2 +1,0 @@
-MASTER_VIDEO_PATH=/Volumes/DATA/01_Playouts/Swamy Bhajans from SKH CD/Hey Shiva Shankara.mp3
-SLAVE_VIDEO_PATH=/Volumes/DATA/01_Playouts/Swamy Bhajans from SKH CD/Hey Shiva Shankara.mp3

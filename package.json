@@ -1,20 +1,82 @@
 {
   "name": "minimal-electron-express",
   "version": "1.0.0",
-  "description": "Minimal Electron app with Express backend for Save Paths.",
+  "description": "Sri Sathya Sai Parallel Playout. Electron control surface with a local AVPlayer helper.",
+  "productName": "Parallel Playout",
   "main": "main.js",
   "scripts": {
-    "start": "concurrently -k -r \"node control.js\" \"wait-on http://localhost:3000 && electron .\""
-  },
-  "dependencies": {
-    "body-parser": "^1.20.2",
-    "express": "^4.18.2",
-    "node-fetch": "^2.7.0",
-    "dotenv": "^16.0.3"
+    "start": "electron .",
+    "build:player": "swift build -c release --package-path native/PlayoutEngine --arch arm64 --arch x86_64 && mkdir -p native/PlayoutEngine/.build/release && cp native/PlayoutEngine/.build/apple/Products/Release/PlayoutEngine native/PlayoutEngine/.build/release/PlayoutEngine",
+    "build:app": "npm run build:player && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --universal",
+    "build:dmg": "npm run build:player && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg dir --universal",
+    "test:player": "node scripts/test-helper.js",
+    "test:player:electron": "electron scripts/electron-player-test.js",
+    "test:link": "node scripts/test-link.js",
+    "test:link:electron": "electron scripts/electron-link-test.js",
+    "test:pairing": "node scripts/test-pairing.js",
+    "test:clock": "node scripts/test-clock.js",
+    "test:pause": "node scripts/test-pause-resume.js",
+    "test:clock:electron": "electron scripts/electron-clock-test.js",
+    "start:master": "PLAYOUT_ROLE=master electron .",
+    "start:slave": "PLAYOUT_ROLE=slave electron ."
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
-    "electron": "^28.2.3",
-    "wait-on": "^7.2.0"
+    "electron": "44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.srisathyasai.parallelplayout",
+    "productName": "Parallel Playout",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "player-session.js",
+      "player-ipc.js",
+      "link-ipc.js",
+      "dialog-filters.js",
+      "playlist-ui.js",
+      "link/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/PlayoutEngine/.build/apple/Products/Release/PlayoutEngine",
+        "to": "playout-engine/PlayoutEngine"
+      }
+    ],
+    "extraMetadata": {
+      "main": "main.js",
+      "dependencies": {}
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "identity": null,
+      "gatekeeperAssess": false,
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "title": "Parallel Playout",
+      "artifactName": "Parallel Playout.dmg"
+    }
   }
 }

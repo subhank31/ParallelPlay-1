@@ -1,837 +1,2050 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sri Sathya Sai Parallel Playout</title>
+  <title>Parallel Playout</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    :root {
+      --bg: #f4f6f9;
+      --sidebar: #ffffff;
+      --top: #ffffff;
+      --panel: #ffffff;
+      --well: #f7f8fb;
+      --line: #e2e6ee;
+      --text: #1b2430;
+      --muted: #5c6b7c;
+      --faint: #6e7c8c;
+      --accent: #2f4ecf;
+      --accent-ink: #ffffff;
+      --accent-soft: #e8edfb;
+      --ok: #157a48;
+      --warn: #9a6700;
+      --bad: #b42318;
+      --shadow: 0 1px 2px rgba(22, 34, 51, 0.06);
+      --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      font-family: 'Georgia', 'Times New Roman', serif;
-      background: linear-gradient(135deg, #1a365d 0%, #2d3748 100%);
-      color: #2d3748;
-      line-height: 1.6;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .container {
-      background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
-      border-radius: 8px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-      max-width: 1400px;
-      width: 100%;
-      min-height: 90vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      border: 2px solid #d69e2e;
-    }
-
-    .header {
-      background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);
-      color: white;
-      padding: 24px 32px;
-      border-bottom: 3px solid #744210;
-      position: relative;
-    }
-
-    .header::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 4px;
-      background: linear-gradient(90deg, #744210 0%, #d69e2e 50%, #744210 100%);
-    }
-
-    .header h1 {
-      font-size: 2rem;
-      font-weight: 700;
       margin: 0;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-      letter-spacing: 1px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.4;
+      overflow: hidden;
     }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
-    .header-subtitle {
-      font-size: 1rem;
-      margin-top: 8px;
-      opacity: 0.9;
-      font-weight: 400;
-    }
-
-    .header-content {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      justify-content: center;
-    }
-
-    .header-logo {
-      width: 70px;
-      height: 70px;
-      object-fit: contain;
-      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
-    }
-
-    .header-text {
-      text-align: left;
-    }
-
-    .main-content {
+    .shell {
+      height: 100%;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
-      padding: 32px;
-      flex: 1;
+      grid-template-columns: 196px minmax(0, 1fr);
+      min-width: 0;
     }
-
-    .panel {
-      background: white;
-      border: 2px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 24px;
+    .sidebar {
+      background: var(--sidebar);
+      border-right: 1px solid var(--line);
       display: flex;
       flex-direction: column;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-      position: relative;
+      min-height: 0;
+      padding: 16px 12px;
     }
+    .brand { padding: 4px 8px 18px; }
+    .brand-name { font-size: 15px; font-weight: 650; letter-spacing: 0.01em; }
+    .brand-meta { color: var(--faint); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
+    .nav-label {
+      color: var(--faint);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 12px 8px 6px;
+    }
+    .nav-item {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      color: var(--muted);
+      padding: 8px 10px;
+      margin-bottom: 2px;
+    }
+    .nav-item:hover { background: #f3f5f9; color: var(--text); }
+    .nav-item[aria-current="page"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .workspace {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .topbar {
+      height: 48px;
+      flex: 0 0 48px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 16px;
+      background: var(--top);
+      border-bottom: 1px solid var(--line);
+    }
+    .top-title { font-weight: 650; margin-right: 8px; white-space: nowrap; }
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .stat b { color: var(--text); font-weight: 600; letter-spacing: 0.03em; }
+    .lamp {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #c5ced8;
+      box-shadow: inset 0 0 0 1px rgba(27, 36, 48, 0.12);
+    }
+    .lamp.ok { background: var(--ok); }
+    .lamp.warn { background: var(--warn); }
+    .lamp.bad { background: var(--bad); }
+    .role-switch { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+    .role-switch button {
+      background: transparent;
+      border: 0;
+      color: var(--muted);
+      padding: 6px 12px;
+      min-width: 84px;
+    }
+    .role-switch button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 
-    .panel::before {
+    .pages { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 12px; }
+    #page-player { min-height: 0; }
+    .page-title { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+    .section-title { font-size: 12px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+    .player-layout { display: flex; flex-direction: column; gap: 12px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+    }
+    .control-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .span-row { grid-column: 1 / -1; }
+    .now-playing { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 16px; align-items: center; }
+    .preview {
+      background: var(--well);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      min-height: 108px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 14px 16px;
+    }
+    .preview-state { color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; font-weight: 650; }
+    .preview-time { font-family: var(--mono); font-size: 34px; letter-spacing: 0.01em; line-height: 1.1; margin-top: 4px; color: var(--text); }
+    .preview-file { color: var(--muted); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .strip {
+      display: flex;
+      align-items: baseline;
+      gap: 18px;
+      padding: 8px 2px;
+    }
+    .strip-state { font-size: 18px; letter-spacing: 0.08em; font-weight: 650; }
+    .strip-time, .strip-rate { font-family: var(--mono); font-size: 18px; }
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px 16px;
+    }
+    .field-label { color: var(--faint); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+    .field-value { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .transport, .rate-row, .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .btn {
+      background: #ffffff;
+      border: 1px solid #d5dbe4;
+      border-radius: 4px;
+      padding: 0 14px;
+      min-height: 36px;
+      min-width: 88px;
+      color: var(--text);
+    }
+    .btn:hover { border-color: #b7c0cc; background: #f8f9fb; }
+    .btn:disabled { background: #eef1f6; color: #4d5b6a; border-color: #d5dbe4; cursor: not-allowed; opacity: 1; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); min-width: 96px; }
+    .btn.primary:hover { background: #263fae; border-color: #263fae; }
+    .btn.pause { background: #fff8ee; border-color: #e4c48a; color: #7a5410; }
+    .btn.stop { background: #fff6f6; border-color: #e4b8b4; color: #9b3a3a; }
+    .timeline-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 72px; gap: 10px; align-items: center; }
+    .timeline-row span { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .seek-controls, .rate-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .seek-controls, .timeline-row { margin-top: 12px; }
+    .now-playing .media-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .pair-request {
+      margin-top: 8px;
+      padding: 12px;
+      border: 1px solid #e4c48a;
+      border-radius: 6px;
+      background: #fffaf2;
+    }
+    .connection-popup {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(22, 34, 51, 0.42);
+    }
+    .connection-popup[hidden] { display: none; }
+    .connection-popup-card {
+      width: min(440px, calc(100% - 32px));
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 16px 40px rgba(22, 34, 51, 0.18);
+    }
+    .connection-popup-card h2 { margin: 0 0 8px; font-size: 18px; }
+    .connection-popup-card p { margin: 0 0 16px; }
+    .wait-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid #e4c48a;
+      border-radius: 6px;
+      background: #fffaf2;
+    }
+    .wait-banner[hidden] { display: none; }
+    input[type="text"], input[type="number"] {
+      background: #ffffff;
+      border: 1px solid #d5dbe4;
+      border-radius: 4px;
+      padding: 7px 10px;
+      min-height: 36px;
+      min-width: 0;
+      color: var(--text);
+    }
+    input::placeholder { color: var(--faint); }
+    .seek-controls input[type="number"] { width: 120px; }
+    .seek-controls .btn { min-width: 72px; }
+    .file-empty { margin: 10px 0 0; color: var(--muted); }
+    .file-info.show + .file-empty { display: none; }
+    .speed-controls { display: flex; gap: 8px; }
+    .speed-controls input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .speed-controls label {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 7px 12px;
+      color: var(--muted);
+      min-width: 64px;
+      text-align: center;
+    }
+    .speed-controls input:focus-visible + label { outline: 2px solid var(--accent); }
+    .speed-controls label { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; background: #ffffff; }
+    .speed-controls input:checked + label { background: var(--accent-soft); color: var(--accent); border-color: #b9c6f3; }
+    .file-info { display: none; margin-top: 4px; }
+    .file-info.show { display: block; }
+    .file-path { color: var(--text); }
+    .playlist-note { color: var(--muted); margin: 8px 0; }
+    .playlist-files { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow: auto; scroll-behavior: smooth; }
+    .playlist-files li { position: relative; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line); color: var(--muted); }
+    .playlist-files li.current { color: var(--text); background: #eef2ff; font-weight: 650; }
+    .playlist-files li.current::before {
       content: '';
       position: absolute;
-      top: 0;
       left: 0;
-      right: 0;
-      height: 3px;
-      background: linear-gradient(90deg, #d69e2e 0%, #744210 50%, #d69e2e 100%);
-      border-radius: 8px 8px 0 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: #b8882f;
     }
+    .playlist-files li.current.playing { background: #e4e9ff; }
+    .playlist-files li.current.playing::before { background: var(--accent); }
+    .play-all { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; color: var(--text); }
+    .play-all input { width: 16px; height: 16px; accent-color: var(--accent); }
 
-    .panel-header {
-      margin-bottom: 20px;
-      padding-bottom: 12px;
-      border-bottom: 2px solid #e2e8f0;
+    .split { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
+    #pairedSlaveCard, #pairedMasterCard { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .stack { display: flex; flex-direction: column; gap: 14px; max-width: 520px; }
+    .kv { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+    .kv .field-label { margin: 0; }
+    .status-block { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+    .diag-grid, .system-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 24px;
+      max-width: 760px;
     }
-
-    .panel-title {
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: #2d3748;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .panel-subtitle {
-      font-size: 0.875rem;
-      color: #718096;
-      margin-top: 4px;
-      font-style: italic;
-    }
-
-    .button-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-
-    .button {
-      background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);
-      color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 12px 20px;
-      font-size: 0.875rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 120px;
-      justify-content: center;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      box-shadow: 0 2px 4px rgba(214, 158, 46, 0.3);
-    }
-
-    .button:hover {
-      background: linear-gradient(135deg, #b7791f 0%, #d69e2e 100%);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 12px rgba(214, 158, 46, 0.4);
-    }
-
-    .button:active {
-      transform: translateY(0);
-    }
-
-    .button.secondary {
-      background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
-      box-shadow: 0 2px 4px rgba(74, 85, 104, 0.3);
-    }
-
-    .button.secondary:hover {
-      background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
-      box-shadow: 0 6px 12px rgba(74, 85, 104, 0.4);
-    }
-
-    .button.danger {
-      background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
-      box-shadow: 0 2px 4px rgba(229, 62, 62, 0.3);
-    }
-
-    .button.danger:hover {
-      background: linear-gradient(135deg, #c53030 0%, #e53e3e 100%);
-      box-shadow: 0 6px 12px rgba(229, 62, 62, 0.4);
-    }
-
-    .button.success {
-      background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
-      box-shadow: 0 2px 4px rgba(56, 161, 105, 0.3);
-    }
-
-    .button.success:hover {
-      background: linear-gradient(135deg, #2f855a 0%, #38a169 100%);
-      box-shadow: 0 6px 12px rgba(56, 161, 105, 0.4);
-    }
-
-    .seek-controls {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-top: 12px;
-    }
-
-    .seek-controls input {
-      flex: 1;
-      padding: 10px 12px;
-      border: 2px solid #e2e8f0;
-      border-radius: 6px;
-      font-size: 0.875rem;
-      background: white;
-      transition: all 0.3s ease;
-      font-family: 'Georgia', serif;
-    }
-
-    .seek-controls input:focus {
-      outline: none;
-      border-color: #d69e2e;
-      box-shadow: 0 0 0 3px rgba(214, 158, 46, 0.1);
-    }
-
-    .speed-controls {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .speed-option {
-      flex: 1;
-    }
-
-    .speed-controls input[type="radio"] {
-      display: none;
-    }
-
-    .speed-controls label {
-      display: block;
-      padding: 12px 16px;
-      border: 2px solid #e2e8f0;
-      border-radius: 6px;
-      background: white;
-      font-size: 0.875rem;
-      font-weight: 600;
-      cursor: pointer;
-      text-align: center;
-      transition: all 0.3s ease;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: #4a5568;
-    }
-
-    .speed-controls label:hover {
-      border-color: #d69e2e;
-      background: #fef5e7;
-      color: #744210;
-    }
-
-    .speed-controls input[type="radio"]:checked+label {
-      background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);
-      color: white;
-      border-color: #d69e2e;
-      font-weight: 700;
-      box-shadow: 0 4px 8px rgba(214, 158, 46, 0.3);
-    }
-
-    .speed-reset {
-      margin-top: 16px;
-      text-align: center;
-    }
-
-    .speed-reset .button {
-      font-size: 14px;
+    .system-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: none; margin-bottom: 18px; }
+    .response-bar {
+      flex: 0 0 auto;
+      border-top: 1px solid var(--line);
       padding: 8px 16px;
-      background: linear-gradient(135deg, #6b7280, #4b5563);
-      border: 2px solid #374151;
-      color: #f9fafb;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-    }
-
-    .speed-reset .button:hover {
-      background: linear-gradient(135deg, #4b5563, #374151);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-    }
-
-    .file-info {
-      background: #f7fafc;
-      border: 2px solid #e2e8f0;
-      border-radius: 6px;
-      padding: 16px;
-      margin-top: 16px;
-      display: none;
-    }
-
-    .file-info.show {
-      display: block;
-    }
-
-    .file-info h3 {
-      font-size: 1.125rem;
-      font-weight: 700;
-      color: #2d3748;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .file-path {
-      font-family: 'Courier New', monospace;
-      font-size: 0.75rem;
-      color: #4a5568;
-      background: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      border-left: 4px solid #d69e2e;
-      margin: 8px 0;
-      word-break: break-all;
-      border: 1px solid #e2e8f0;
-    }
-
-    .response {
-      background: linear-gradient(135deg, #fef5e7 0%, #fed7aa 100%);
-      border: 2px solid #d69e2e;
-      border-radius: 6px;
-      padding: 16px 24px;
-      margin: 0 32px 24px 32px;
-      color: #744210;
-      font-size: 0.875rem;
-      font-weight: 600;
-      min-height: 24px;
+      color: var(--muted);
       display: flex;
-      align-items: center;
-      font-family: 'Georgia', serif;
+      gap: 16px;
+      align-items: baseline;
+      min-height: 36px;
     }
-
-    .response::before {
-      content: "•";
-      margin-right: 8px;
-      font-size: 1.5rem;
-      color: #d69e2e;
-    }
-
-    .response.error {
-      background: linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%);
-      border-color: #e53e3e;
-      color: #742a2a;
-    }
-
-    .response.error::before {
-      content: "•";
-      color: #e53e3e;
-    }
-
-    .response.success {
-      background: linear-gradient(135deg, #c6f6d5 0%, #9ae6b4 100%);
-      border-color: #38a169;
-      color: #22543d;
-    }
-
-    .response.success::before {
-      content: "•";
-      color: #38a169;
-    }
-
-    .form-group {
-      margin-bottom: 16px;
-    }
-
-    .form-group label {
-      display: block;
-      font-size: 0.875rem;
-      font-weight: 600;
-      color: #2d3748;
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .form-group input {
-      width: 100%;
-      padding: 10px 12px;
-      border: 2px solid #e2e8f0;
+    .response.error { color: var(--bad); }
+    .response.success { color: var(--ok); }
+    .response.info { color: var(--muted); }
+    .response.warning { color: var(--warn); }
+    #errorTechnical { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+    #page-diagnostics,
+    #page-connection .split > .stack,
+    #page-settings > .stack,
+    #page-about .about {
+      background: #ffffff;
+      border: 1px solid var(--line);
       border-radius: 6px;
-      font-size: 0.875rem;
-      background: white;
-      transition: all 0.3s ease;
-      font-family: 'Georgia', serif;
+      box-shadow: var(--shadow);
+      padding: 16px;
     }
-
-    .form-group input:focus {
-      outline: none;
-      border-color: #d69e2e;
-      box-shadow: 0 0 0 3px rgba(214, 158, 46, 0.1);
+    .about { max-width: 640px; color: var(--muted); }
+    .about h2 { color: var(--text); font-size: 16px; font-weight: 650; margin: 0 0 8px; }
+    @media (max-width: 1100px) {
+      .media-grid, .system-grid, .control-grid, .now-playing { grid-template-columns: 1fr; }
+      .now-playing .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .span-row { grid-column: auto; }
+      .preview-time { font-size: 28px; }
     }
-
-    @media (max-width: 1024px) {
-      .main-content {
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 20px;
-        padding: 24px;
-      }
-    }
-
-    @media (max-width: 768px) {
-      body {
-        padding: 12px;
-      }
-
-      .container {
-        min-height: 95vh;
-      }
-
-      .header {
-        padding: 20px 24px;
-      }
-
-      .header h1 {
-        font-size: 1.5rem;
-      }
-
-      .main-content {
-        grid-template-columns: 1fr;
-        gap: 16px;
-        padding: 20px;
-      }
-
-      .panel {
-        padding: 20px;
-      }
-
-      .button {
-        min-width: 100px;
-        padding: 10px 16px;
-        font-size: 0.8rem;
-      }
-
-      .response {
-        margin: 0 20px 20px 20px;
-        padding: 12px 16px;
-      }
-    }
-
-    @media (max-width: 480px) {
-      .button-group {
-        flex-direction: column;
-      }
-
-      .button {
-        width: 100%;
-        justify-content: center;
-      }
-
-      .seek-controls {
-        flex-direction: column;
-      }
-
-      .speed-controls {
-        flex-direction: column;
-      }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
     }
   </style>
 </head>
-
 <body>
-  <div class="container">
-    <div class="header">
-      <div class="header-content">
-        <img src="Final logo.png" alt="Sri Sathya Sai Logo" class="header-logo">
-        <div class="header-text">
-          <h1>Sri Sathya Sai Parallel Playout</h1>
-          <div class="header-subtitle">Media Control System</div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-name">Parallel Playout</div>
+        <div class="brand-meta">Control</div>
+      </div>
+      <div class="nav-label">Playout</div>
+      <button type="button" class="nav-item" id="nav-player" data-page="player" aria-current="page">Player</button>
+      <button type="button" class="nav-item" id="nav-connection" data-page="connection">Connection</button>
+      <button type="button" class="nav-item" id="nav-diagnostics" data-page="diagnostics">Diagnostics</button>
+      <div class="nav-label">System</div>
+      <button type="button" class="nav-item" id="nav-settings" data-page="settings">Settings</button>
+      <button type="button" class="nav-item" id="nav-about" data-page="about">About</button>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="top-title">Parallel Playout</div>
+        <div class="stat">Role <b id="topRole">MASTER</b></div>
+        <div class="stat"><span class="lamp" id="topConnectionLamp"></span> Connection <b id="topConnection">Disconnected</b></div>
+        <div class="stat"><span class="lamp" id="topPlayerLamp"></span> Player <b id="topPlayer">Idle</b></div>
+        <div class="role-switch" role="group" aria-label="Role">
+          <button type="button" id="roleMasterBtn" data-role-choice="master" aria-pressed="true" onclick="chooseRole('master')">Master</button>
+          <button type="button" id="roleSlaveBtn" data-role-choice="slave" aria-pressed="false" onclick="chooseRole('slave')">Slave</button>
         </div>
+      </header>
+      <div id="slaveFirewallBanner" class="wait-banner" role="alert" hidden>
+        <span id="slaveFirewallText"></span>
+      </div>
+      <div id="slaveWaitBanner" class="wait-banner" hidden>
+        <span id="slaveWaitText"></span>
+        <button type="button" class="btn" onclick="confirmUnpair()">Remove Connection</button>
+      </div>
+      <main class="pages">
+        <section class="page" id="page-player" data-page="player">
+          <div class="player-layout">
+            <section class="card now-playing" aria-label="Now playing">
+              <div class="preview empty" aria-live="polite">
+                <div class="preview-state" id="previewState">No media loaded</div>
+                <div class="preview-time num" id="previewTime">00:00.00</div>
+                <div class="preview-file" id="previewFile">Picture plays on the playout display.</div>
+              </div>
+              <div>
+                <div class="strip" aria-live="polite">
+                  <div class="strip-state" id="stripState">IDLE</div>
+                  <div class="strip-time num" id="stripTime">00:00.00 / 00:00.00</div>
+                  <div class="strip-rate num" id="stripRate">1.00×</div>
+                </div>
+                <div class="media-grid">
+                  <div><div class="field-label">Filename</div><div class="field-value" id="infoFile">No media loaded</div></div>
+                  <div><div class="field-label">Duration</div><div class="field-value num" id="infoDuration">—</div></div>
+                  <div><div class="field-label">Position</div><div class="field-value num" id="infoPosition">—</div></div>
+                  <div><div class="field-label">Remaining</div><div class="field-value num" id="infoRemain">—</div></div>
+                  <div><div class="field-label">Rate</div><div class="field-value num" id="infoRate">1.00×</div></div>
+                  <div><div class="field-label">Slave</div><div class="field-value" id="infoSlaveMedia">—</div></div>
+                </div>
+              </div>
+            </section>
+            <div class="control-grid">
+              <section class="card" aria-label="File Management">
+                <h2 class="section-title">File Management</h2>
+                <div class="inline-actions">
+                  <button type="button" class="btn" id="chooseSingleFileBtn">Open file</button>
+                  <button type="button" class="btn" id="chooseFileBtn">Open playlist</button>
+                </div>
+                <input type="text" id="masterFile" hidden>
+                <input type="text" id="slaveFile" hidden>
+                <div id="fileInfo" class="file-info">
+                  <div class="playlist-note"><span id="totalFilesCount">0</span> file(s) on this Mac. <button type="button" class="btn" id="toggleListBtn" onclick="toggleFileList()">View All</button></div>
+                  <div><span id="currentItemHeadline">Selected</span> <span id="currentPosition">1</span>/<span id="totalFiles">1</span></div>
+                  <div class="file-path" id="masterFileName"></div>
+                </div>
+                <p class="file-empty">No file selected.</p>
+              </section>
+              <section class="card" aria-label="Playback">
+                <h2 class="section-title">Playback</h2>
+                <div class="transport" aria-label="Playback">
+                  <button type="button" class="btn primary" onclick="playFile()">Play</button>
+                  <button type="button" class="btn pause" onclick="pauseFile()">Pause</button>
+                  <button type="button" class="btn stop" onclick="stopFile()">Stop</button>
+                  <button type="button" class="btn" id="fullscreenBtn" onclick="enterFullscreen()" hidden>Fullscreen</button>
+                </div>
+                <div class="timeline-row">
+                  <span id="timelineNow">00:00.00</span>
+                  <input type="range" id="timeline" min="0" max="0" step="0.01" value="0" aria-label="Playback position" disabled>
+                  <span id="timelineEnd">00:00.00</span>
+                </div>
+              </section>
+              <section class="card span-row" aria-label="Navigation">
+                <h2 class="section-title">Navigation</h2>
+                <div class="inline-actions">
+                  <button type="button" class="btn" id="prevBtn" onclick="previousFile()" disabled>Previous</button>
+                  <button type="button" class="btn" id="nextBtn" onclick="nextFile()" disabled>Next</button>
+                  <label class="play-all" for="playAllBox"><input type="checkbox" id="playAllBox" onchange="publishSession()"> Play all items</label>
+                </div>
+                <div class="seek-controls">
+                  <label class="field-label" for="seekValue">Seek seconds</label>
+                  <input type="number" id="seekValue" min="0" step="0.01" placeholder="Seconds" aria-label="Seek to seconds">
+                  <button type="button" class="btn" onclick="seekTo()">Seek</button>
+                  <button type="button" class="btn" onclick="skipBy(-10)">Back 10s</button>
+                  <button type="button" class="btn" onclick="skipBy(10)">Forward 10s</button>
+                </div>
+              </section>
+              <section class="card span-row" aria-label="Speed">
+                <h2 class="section-title">Speed</h2>
+                <div class="rate-row">
+                  <span class="field-label">Rate</span>
+                  <div class="speed-controls">
+                    <div class="speed-option"><input type="radio" id="speed05" name="speed" value="0.5"><label for="speed05">0.5×</label></div>
+                    <div class="speed-option"><input type="radio" id="speed10" name="speed" value="1.0" checked><label for="speed10">1.0×</label></div>
+                    <div class="speed-option"><input type="radio" id="speed15" name="speed" value="1.5"><label for="speed15">1.5×</label></div>
+                  </div>
+                  <button type="button" class="btn" id="resetSpeedBtn" onclick="resetSpeed()">Reset Speed to 1.0x</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-connection" data-page="connection" hidden>
+          <h1 class="page-title">Connection</h1>
+          <div class="split">
+            <div id="masterConnectRow" class="stack">
+              <div class="field-label">My role</div>
+              <div id="connectionRoleMaster">MASTER</div>
+              <div class="field-label" style="margin-top:12px">Paired Slave</div>
+              <div id="pairedSlaveCard" class="status-block">
+                <div id="pairedSlaveName">No Slave paired</div>
+                <div id="pairedSlaveHost" class="field-label"></div>
+                <div><span class="lamp" id="masterLinkLamp"></span> <span id="masterLinkLabel">Not paired</span></div>
+              </div>
+              <div id="addSlavePanel" class="stack" style="margin-top:12px">
+                <div class="field-label">Add Slave</div>
+                <label class="field-label" for="slaveHost">Slave address</label>
+                <input type="text" id="slaveHost" placeholder="192.168.127.184" autocomplete="off">
+                <input type="number" id="slavePort" value="47631" min="1" max="65535" hidden>
+                <div class="inline-actions">
+                  <button type="button" class="btn primary" id="connectBtn" onclick="requestSlavePairing()">Request Connection</button>
+                </div>
+                <p class="field-label" id="pairRequestStatus"></p>
+                <p class="field-label num" id="connectionTraceStatus" style="margin-top:6px;white-space:pre-wrap"></p>
+              </div>
+              <div class="inline-actions" id="masterPairActions" hidden>
+                <button type="button" class="btn" onclick="openSlaveApp()">Open Slave App</button>
+                <button type="button" class="btn" onclick="confirmUnpair()">Remove Connection</button>
+              </div>
+              <div class="inline-actions" id="masterActions" style="margin-top:12px">
+                <button type="button" class="btn" onclick="pingSlave()">Ping</button>
+                <button type="button" class="btn" onclick="getSlaveStatus()">Get status</button>
+                <button type="button" class="btn" onclick="syncClock()">Sync clock</button>
+              </div>
+              <div><span class="field-label">Slave</span><div id="masterEndpoint">No slave selected</div></div>
+            </div>
+            <div id="slaveListenRow" class="stack" hidden>
+              <div class="field-label">My role</div>
+              <div>SLAVE</div>
+              <div class="field-label" style="margin-top:12px">Device</div>
+              <div id="slaveDeviceName">Parallel Playout</div>
+              <div class="status-block"><span class="lamp" id="slaveListenLamp"></span> <span id="slaveListenLabel">Not listening</span></div>
+              <div><span class="field-label">Address</span><div class="num" id="slaveAddress">0.0.0.0:47631</div></div>
+              <div class="field-label" style="margin-top:12px">Paired Master</div>
+              <div id="pairedMasterCard" class="status-block">
+                <div id="pairedMasterName">No Master paired</div>
+                <div id="pairedMasterHost" class="field-label"></div>
+                <div id="slaveMasterLabel">Waiting</div>
+              </div>
+              <div id="incomingPairPanel" class="stack pair-request" hidden>
+                <div id="incomingPairName" style="font-weight:600">Connection Request</div>
+                <div id="incomingPairHost"></div>
+                <div class="inline-actions">
+                  <button type="button" class="btn primary" onclick="acceptIncomingPair()">Accept</button>
+                  <button type="button" class="btn" onclick="rejectIncomingPair()">Reject</button>
+                </div>
+              </div>
+              <div class="inline-actions" id="slavePairActions" hidden>
+                <button type="button" class="btn" onclick="confirmUnpair()">Remove Connection</button>
+              </div>
+              <label class="field-label" for="listenPort" style="margin-top:12px">Listen port (advanced)</label>
+              <input type="number" id="listenPort" value="47631" min="1024" max="65535">
+              <div><button type="button" class="btn" onclick="listenAsSlave()">Listen</button></div>
+            </div>
+            <p class="field-label" id="linkStatusLine">Master. No Slave paired.</p>
+          </div>
+        </section>
+
+        <section class="page" id="page-diagnostics" data-page="diagnostics" hidden>
+          <h1 class="page-title">Diagnostics</h1>
+          <div class="system-grid">
+            <div><div class="field-label">Player engine</div><div class="status-block"><span class="lamp" id="engineLamp"></span> <span id="engineStatus">Starting</span></div></div>
+            <div><div class="field-label">AVPlayer</div><div class="status-block"><span class="lamp" id="avLamp"></span> <span id="avStatus">No media</span></div></div>
+            <div><div class="field-label">Network</div><div class="status-block"><span class="lamp" id="netLamp"></span> <span id="netStatus">Disconnected</span></div></div>
+            <div><div class="field-label">Clock</div><div class="status-block"><span class="lamp" id="clockHealthLamp"></span> <span id="clockHealth">Unsynchronized</span></div></div>
+          </div>
+          <h2 class="section-title">Clock synchronization</h2>
+          <div class="diag-grid">
+            <div><div class="field-label">Status</div><div id="clockStatusLine">Unsynchronized</div></div>
+            <div><div class="field-label">Offset</div><div class="num" id="clockOffsetLine">—</div></div>
+            <div><div class="field-label">RTT</div><div class="num" id="clockRttLine">—</div></div>
+            <div><div class="field-label">Jitter</div><div class="num" id="clockJitterLine">—</div></div>
+            <div><div class="field-label">Samples</div><div class="num" id="clockSamples">—</div></div>
+            <div><div class="field-label">Last sync</div><div id="clockLastLine">—</div></div>
+          </div>
+          <h2 class="section-title" style="margin-top: 22px;">Scheduled playback</h2>
+          <div class="diag-grid">
+            <div><div class="field-label">Last target</div><div class="num" id="schedTarget">—</div></div>
+            <div><div class="field-label">Actual execution</div><div class="num" id="schedActual">—</div></div>
+            <div><div class="field-label">Execution error</div><div class="num" id="schedError">—</div></div>
+          </div>
+          <p class="field-label" id="clockExecutionLine" style="margin-top: 8px;">Application clock times, not the first video frame.</p>
+          <div class="inline-actions" id="clockSyncRow" style="margin-top: 14px;">
+            <button type="button" class="btn" onclick="syncClock()">Sync clock</button>
+            <button type="button" class="btn" onclick="scheduledPlayTest()">Schedule playback</button>
+          </div>
+        </section>
+
+        <section class="page" id="page-settings" data-page="settings" hidden>
+          <h1 class="page-title">Settings</h1>
+          <div class="stack">
+            <div class="field-label">Role</div>
+            <div class="inline-actions">
+              <button type="button" class="btn" data-role-choice="master" onclick="chooseRole('master')">Master</button>
+              <button type="button" class="btn" data-role-choice="slave" onclick="chooseRole('slave')">Slave</button>
+            </div>
+            <div>Current role: <b id="settingsRoleValue">Master</b></div>
+            <div style="margin-top:16px">
+              <div class="field-label">Device name</div>
+              <div id="settingsDeviceName">—</div>
+              <div class="field-label" style="margin-top:12px">Media directory</div>
+              <div id="settingsMediaRoot">Not configured</div>
+              <div class="inline-actions" style="margin-top:8px">
+                <button type="button" class="btn" onclick="chooseMediaRoot()">Choose media directory</button>
+              </div>
+              <p class="field-label" style="margin-top:8px">Master and Slave must use the same folder layout. Only relative paths are sent over the network.</p>
+            </div>
+            <label class="field-label" for="settingsHost">Slave host</label>
+            <input type="text" id="settingsHost" autocomplete="off">
+            <label class="field-label" for="settingsPort">Slave port</label>
+            <input type="number" id="settingsPort" min="1" max="65535">
+            <label class="field-label" for="settingsListen">Listen port</label>
+            <input type="number" id="settingsListen" min="1024" max="65535">
+            <div><span class="field-label">Schedule lead</span><div class="num" id="scheduleLeadValue">1000 ms</div></div>
+            <p class="field-label">Host and port are saved on this Mac. Schedule lead is the value this launch is using.</p>
+          </div>
+        </section>
+
+        <section class="page" id="page-about" data-page="about" hidden>
+          <div class="about">
+            <h2>Parallel Playout</h2>
+            <p>Control surface for local AVPlayer playout. Pair a Master with a Slave once; the Master then mirrors load and playback commands to the Slave’s matching local media.</p>
+            <p>Mirrored playback is command propagation, not frame-accurate synchronization. Clock sync remains available for the next synchronized-playout stage.</p>
+          </div>
+        </section>
+      </main>
+      <div class="response-bar">
+        <div class="response info" id="responseBox" role="status">Ready</div>
+        <div id="errorTechnical" hidden></div>
       </div>
     </div>
-
-    <div class="main-content">
-      <!-- File Management Panel -->
-      <div class="panel" id="fileSelectionSection">
-        <div class="panel-header">
-          <div class="panel-title">File Management</div>
-          <div class="panel-subtitle">Select and manage video files for playback</div>
-        </div>
-
-        <div class="form-group">
-          <label for="chooseFileBtn">Video File Selection</label>
-          <button type="button" id="chooseFileBtn" class="button success">
-            Choose File
-          </button>
-        </div>
-
-        <form id="pathsForm" style="display: none;">
-          <div class="form-group">
-            <label for="masterFile">Master File Path</label>
-            <input type="text" id="masterFile" name="masterFile" placeholder="/path/to/master.mp4" required>
-          </div>
-          <div class="form-group">
-            <label for="slaveFile">Slave File Path</label>
-            <input type="text" id="slaveFile" name="slaveFile" placeholder="/path/to/slave.mp4" required>
-          </div>
-        </form>
-
-        <div id="fileInfo" class="file-info">
-          <h3>Selected Files</h3>
-          <div>
-            <strong>Master:</strong>
-            <div class="file-path" id="masterFileName"></div>
-          </div>
-          <div>
-            <strong>Slave:</strong>
-            <div class="file-path" id="slaveFileName"></div>
-          </div>
-          <button type="button" id="changeFileBtn" class="button secondary" style="margin-top: 12px;">
-            Change Files
-          </button>
-        </div>
-      </div>
-
-      <!-- Playback Controls Panel -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">Playback Controls</div>
-          <div class="panel-subtitle">Control video playback and synchronization</div>
-        </div>
-
-        <div class="button-group">
-          <button onclick="sendCommand('wakeUp')" class="button success">
-            Test
-          </button>
-        </div>
-
-        <div class="button-group">
-          <button onclick="sendCommand('play')" class="button">
-            Play
-          </button>
-          <button onclick="sendCommand('pause')" class="button secondary">
-            Pause
-          </button>
-          <button onclick="sendCommand('stop')" class="button danger">
-            Stop
-          </button>
-        </div>
-
-        <div class="button-group">
-          <button onclick="sendCommand('fullscreen')" class="button">
-            Fullscreen
-          </button>
-          <button onclick="sendCommand('sync')" class="button">
-            Sync
-          </button>
-        </div>
-      </div>
-
-      <!-- Navigation Panel -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">Navigation</div>
-          <div class="panel-subtitle">Navigate through video timeline</div>
-        </div>
-
-        <div class="button-group">
-          <button onclick="sendCommand('skip_backward')" class="button">
-            Skip Backward 10s
-          </button>
-          <button onclick="sendCommand('skip_forward')" class="button">
-            Skip Forward 10s
-          </button>
-        </div>
-
-        <div class="seek-controls">
-          <input type="number" id="seekValue" placeholder="Enter time in seconds">
-          <button onclick="seekTo()" class="button">
-            Seek
-          </button>
-        </div>
-      </div>
-
-      <!-- Speed Control Panel -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">Speed Control</div>
-          <div class="panel-subtitle">Adjust playback speed</div>
-        </div>
-
-        <div class="speed-controls">
-          <div class="speed-option">
-            <input type="radio" id="speed05" name="speed" value="0.5">
-            <label for="speed05">0.5x</label>
-          </div>
-          <div class="speed-option">
-            <input type="radio" id="speed10" name="speed" value="1.0">
-            <label for="speed10">1.0x</label>
-          </div>
-          <div class="speed-option">
-            <input type="radio" id="speed15" name="speed" value="1.5">
-            <label for="speed15">1.5x</label>
-          </div>
-        </div>
-        <div class="speed-reset">
-          <button onclick="sendCommand('resetSpeed')" class="button secondary">Reset Speed to 1.0x</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="response" id="responseBox">Ready to control playback</div>
   </div>
-
+  <div id="connectionRequestPopup" class="connection-popup" hidden>
+    <div class="connection-popup-card" role="dialog" aria-modal="true" aria-labelledby="connectionRequestTitle">
+      <h2 id="connectionRequestTitle">Connection Request</h2>
+      <p id="connectionRequestBody"></p>
+      <div class="inline-actions">
+        <button type="button" class="btn primary" onclick="acceptIncomingPair()">Accept</button>
+        <button type="button" class="btn" onclick="rejectIncomingPair()">Reject</button>
+      </div>
+    </div>
+  </div>
+  <script src="playlist-ui.js"></script>
   <script>
-    async function sendCommand(command) {
-      const masterFile = document.getElementById('masterFile').value;
-      const slaveFile = document.getElementById('slaveFile').value;
-      let body = { command };
-      if (masterFile) body.masterFile = masterFile;
-      if (slaveFile) body.slaveFile = slaveFile;
+    let currentPlaylistFiles = [];
+    let currentFileIndex = 0;
+    let lastPlayerState = null;
+    let shownIndex = -1;
+    let recoveredFile = null;
+    let recoveryError = '';
 
-      // If play command is sent, automatically check the 1.0x speed button
-      if (command === 'play') {
-        const speed10Radio = document.getElementById('speed10');
-        if (speed10Radio) {
-          speed10Radio.checked = true;
-        }
+    function mediaTypeOf(filePath) {
+      const ext = String(filePath || '').split('.').pop().toLowerCase();
+      if (['mp3', 'wav', 'aac', 'm4a', 'm4b', 'flac', 'ogg', 'opus', 'aiff', 'aif', 'caf'].indexOf(ext) !== -1) return 'audio';
+      if (['mp4', 'mov', 'm4v'].indexOf(ext) !== -1) return 'video';
+      return 'file';
+    }
+
+    function asEntry(filePath) {
+      const name = String(filePath).split('/').pop() || String(filePath);
+      return { path: filePath, name: name, type: mediaTypeOf(filePath), duration: null };
+    }
+
+    function entryPath(entry) {
+      if (!entry) return '';
+      return typeof entry === 'string' ? entry : entry.path;
+    }
+
+    function entryName(entry) {
+      if (!entry) return '';
+      if (typeof entry === 'string') return entry.split('/').pop() || entry;
+      return entry.name || entryPath(entry).split('/').pop();
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function typeLabel(type) {
+      if (type === 'audio') return 'Audio';
+      if (type === 'video') return 'Video';
+      return 'File';
+    }
+    let fileListVisible = false;
+    let timelineDragging = false;
+    let engineState = 'starting';
+    let linkSnapshot = null;
+    let mirroredLocalPath = null;
+    let lastExecution = null;
+
+    function setText(id, value) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = value;
+    }
+
+    function setLamp(id, kind) {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.className = 'lamp' + (kind ? ' ' + kind : '');
+    }
+
+    function formatClock(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) return '00:00.00';
+      const mins = Math.floor(seconds / 60);
+      const rest = seconds - mins * 60;
+      const whole = Math.floor(rest);
+      const frac = Math.min(99, Math.floor((rest - whole) * 100 + 1e-6));
+      return String(mins).padStart(2, '0') + ':' + String(whole).padStart(2, '0') + '.' + String(frac).padStart(2, '0');
+    }
+
+    function formatRate(rate) {
+      const value = Number.isFinite(rate) ? rate : 1;
+      return value.toFixed(2) + '×';
+    }
+
+    function playerLabel(status) {
+      const labels = {
+        idle: 'Idle',
+        loading: 'Loading',
+        ready: 'Ready',
+        playing: 'Playing',
+        paused: 'Paused',
+        stopped: 'Stopped',
+        ended: 'Ended',
+        error: 'Error',
+        failed: 'Error'
+      };
+      return labels[status] || 'Idle';
+    }
+
+    function describeFailure(error, host, port) {
+      const raw = typeof error === 'string' ? error : ((error && (error.message || error.code)) || 'Could not complete the request.');
+      if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|not connected|timeout/i.test(raw)) {
+        const where = host ? host + ':' + port : 'the slave';
+        return { summary: 'Slave unavailable. Could not connect to ' + where + '.', technical: raw };
       }
+      return { summary: raw, technical: '' };
+    }
 
-      console.log('Sending command:', command);
-      console.log('Request body:', body);
-
-      if (command === 'seek') {
-        const seekValue = document.getElementById('seekValue').value;
-        if (!seekValue) {
-          showResponse('Please enter a seek value.', 'error');
-          return;
-        }
-        body.seekValue = seekValue;
+    function describePlayerError(message) {
+      if (/codec|format|unsupported|invalid media|not supported/i.test(message || '')) {
+        return 'Unable to play this file. The selected media format or codec is not supported.';
       }
+      return message;
+    }
 
-      showResponse('Sending command...', 'info');
+    function localPlayer() {
+      if (!window.electronAPI || !window.electronAPI.player) {
+        showResponse('Local player is not available. Start the app with Electron.', 'error');
+        return null;
+      }
+      return window.electronAPI.player;
+    }
 
+    function showPlayerResult(result, successText) {
+      if (!result || result.ok === false) {
+        const raw = (result && result.error) || 'Player command failed';
+        showResponse(describePlayerError(raw), 'error', raw === describePlayerError(raw) ? '' : raw);
+        return false;
+      }
+      showResponse(successText || 'OK', 'success');
+      refreshPlayer();
+      return true;
+    }
+
+    function slaveHasCurrentMedia(file) {
+      if (!file || !linkSnapshot || linkSnapshot.connection !== 'connected') return false;
+      if (linkSnapshot.slaveMediaStatus !== 'ready') return false;
+      return linkSnapshot.mirroredMedia === file || mirroredLocalPath === file;
+    }
+
+    async function mirrorIfMaster(type, payload) {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      if (!linkSnapshot || linkSnapshot.role !== 'master' || !linkSnapshot.paired) return;
       try {
-        const res = await fetch('http://localhost:3000/control', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-
-        console.log('Response status:', res.status);
-        const data = await res.json();
-        console.log('Response data:', data);
-
-        if (data.message) {
-          showResponse(data.message, 'success');
-        } else if (data.error) {
-          showResponse('Error: ' + data.error, 'error');
-        } else {
-          showResponse('No response from server.', 'error');
+        const result = await window.electronAPI.link.mirrorCommand(type, payload || {});
+        if (result && result.ok === false && result.error && result.error.code !== 'NOT_CONNECTED') {
+          const msg = (result.error && result.error.message) || 'Slave command failed.';
+          showResponse(msg, 'error');
         }
+        if (result && result.snapshot) paintLink(result.snapshot);
       } catch (err) {
-        console.error('Request failed:', err);
-        showResponse('Request failed: ' + err, 'error');
+        showResponse('Could not reach the Slave.', 'error', err.message);
       }
     }
 
-    function seekTo() {
-      sendCommand('seek');
+    async function mirrorLoadIfMaster(absolutePath) {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      if (!linkSnapshot || linkSnapshot.role !== 'master' || !linkSnapshot.paired) return;
+      try {
+        const result = await window.electronAPI.link.mirrorLoad(absolutePath);
+        if (result && result.snapshot) paintLink(result.snapshot);
+        if (result && result.ok === false) {
+          const err = result.error || {};
+          if (err.code === 'MEDIA_NOT_FOUND' || /MEDIA NOT FOUND/i.test(err.message || '')) {
+            setText('infoSlaveMedia', '⚠ Media missing');
+            showResponse('Slave media missing: ' + (err.mediaPath || absolutePath.split('/').pop()), 'error', err.message);
+          } else if (err.code === 'NO_MEDIA_ROOT' || err.code === 'OUTSIDE_MEDIA_ROOT') {
+            showResponse(err.message || 'Configure matching media directories on Master and Slave.', 'error');
+          } else if (err.code !== 'NOT_CONNECTED') {
+            showResponse(err.message || 'Slave load failed.', 'error');
+          }
+        } else if (result && result.ok) {
+          mirroredLocalPath = absolutePath;
+          setText('infoSlaveMedia', '● Ready');
+        }
+      } catch (err) {
+        showResponse('Could not load media on the Slave.', 'error', err.message);
+      }
+    }
+
+    async function seekTo() {
+      const seekValue = document.getElementById('seekValue').value;
+      if (seekValue === '' || isNaN(seekValue) || seekValue < 0) {
+        showResponse('Enter a time in seconds, zero or greater.', 'error');
+        return;
+      }
+      const player = localPlayer();
+      if (!player) return;
+      const seconds = Number(seekValue);
+      showResponse('Seeking to ' + seconds + ' seconds.', 'info');
+      try {
+        const result = await player.seek(seconds);
+        if (showPlayerResult(result, 'Seeked to ' + seconds + ' seconds.')) {
+          await mirrorIfMaster('seek', seekMirrorPayload(result, seconds));
+        }
+      } catch (err) {
+        showResponse('Unable to seek.', 'error', err.message);
+      }
     }
 
     async function setSpeed(speed) {
-      console.log('Setting speed to:', speed);
-
-      showResponse(`Setting speed to ${speed}x...`, 'info');
-
+      const player = localPlayer();
+      if (!player) return;
+      showResponse('Setting speed to ' + speed + '×.', 'info');
       try {
-        const response = await fetch('http://localhost:3000/control', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: 'setSpeed', speed: speed })
-        });
-
-        const data = await response.json();
-        if (data.message) {
-          showResponse(data.message, 'success');
-        } else if (data.error) {
-          showResponse('Error: ' + data.error, 'error');
+        const result = await player.setRate(speed);
+        if (showPlayerResult(result, 'Speed set to ' + speed + '×.')) {
+          await mirrorIfMaster('setRate', { rate: speed });
         }
       } catch (err) {
-        console.error('Failed to set speed:', err);
-        showResponse('Failed to set speed: ' + err.message, 'error');
+        showResponse('Unable to change the playback rate.', 'error', err.message);
       }
     }
 
-    function showResponse(msg, type = 'info') {
-      const responseBox = document.getElementById('responseBox');
-      responseBox.textContent = msg;
-      responseBox.className = 'response ' + type;
+    async function resetSpeed() {
+      const speed10Radio = document.getElementById('speed10');
+      if (speed10Radio) speed10Radio.checked = true;
+      await setSpeed(1);
     }
 
-    async function autoSavePaths() {
-      const masterFile = document.getElementById('masterFile').value;
-      const slaveFile = document.getElementById('slaveFile').value;
-      console.log('autoSavePaths called with:', { masterFile, slaveFile });
-
-      if (masterFile && slaveFile) {
-        try {
-          console.log('Saving paths to server...');
-          const response = await fetch('http://localhost:3000/control', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: 'savePaths', masterFile, slaveFile })
-          });
-
-          console.log('Save response status:', response.status);
-          const data = await response.json();
-          console.log('Save response data:', data);
-
-          if (data.message) {
-            console.log('Paths saved successfully:', data.message);
-            showResponse('File paths saved successfully.', 'success');
-          } else if (data.error) {
-            console.error('Error saving paths:', data.error);
-            showResponse('Error saving paths: ' + data.error, 'error');
-          }
-
-          updateFileDisplay();
-        } catch (err) {
-          console.error('Failed to save paths:', err);
-          showResponse('Failed to save paths: ' + err.message, 'error');
+    async function skipBy(delta) {
+      const player = localPlayer();
+      if (!player) return;
+      try {
+        const current = await player.getState();
+        if (!current || current.ok === false) {
+          showPlayerResult(current);
+          return;
         }
-      } else {
-        console.log('Cannot save paths - missing file values');
+        const state = current.state || {};
+        if (!state.path) {
+          showResponse('Load a file before skipping.', 'error');
+          return;
+        }
+        let target = Math.max(0, Number(state.position || 0) + delta);
+        if (typeof state.duration === 'number' && Number.isFinite(state.duration)) {
+          target = Math.min(state.duration, target);
+        }
+        const result = await player.seek(target);
+        if (showPlayerResult(result, 'Seeked to ' + target.toFixed(2) + 's on this Mac.')) {
+          await mirrorIfMaster('seek', seekMirrorPayload(result, target));
+        }
+      } catch (err) {
+        showResponse('Unable to skip.', 'error', err.message);
       }
+    }
+
+    async function enterFullscreen() {
+      const entry = currentPlaylistFiles[currentFileIndex];
+      const type = entry && typeof entry === 'object' && entry.type
+        ? entry.type
+        : mediaTypeOf(entryPath(entry));
+      if (!window.PlaylistUI.fullscreenAvailable(type)) return;
+      const player = localPlayer();
+      if (!player) return;
+      try {
+        const result = await player.fullscreen(true);
+        if (showPlayerResult(result, 'Fullscreen on this Mac.')) {
+          await mirrorIfMaster('fullscreen', { enabled: true });
+        }
+      } catch (err) {
+        showResponse('Fullscreen failed.', 'error', err.message);
+      }
+    }
+
+    function showResponse(msg, type, technical) {
+      const responseBox = document.getElementById('responseBox');
+      if (!responseBox) return;
+      responseBox.textContent = msg;
+      responseBox.className = 'response ' + (type || 'info');
+      const detail = document.getElementById('errorTechnical');
+      if (!detail) return;
+      if (technical) {
+        detail.hidden = false;
+        detail.textContent = technical;
+      } else {
+        detail.hidden = true;
+        detail.textContent = '';
+      }
+    }
+
+    async function loadSelectedIntoPlayer() {
+      const player = localPlayer();
+      const file = entryPath(currentPlaylistFiles[currentFileIndex]);
+      if (!player || !file) return;
+      showResponse('Loading file into the local player.', 'info');
+      try {
+        const result = await player.load(file);
+        const name = file.split('/').pop();
+        if (showPlayerResult(result, 'Loaded ' + name + '. Press Play to start.')) {
+          updateFileDisplay();
+          await mirrorLoadIfMaster(file);
+          fillDurations();
+        }
+      } catch (err) {
+        showResponse('Unable to load this file.', 'error', err.message);
+      }
+    }
+
+    async function fillDurations() {
+      const player = localPlayer();
+      if (!player || !player.inspect) return;
+      let changed = false;
+      for (const entry of currentPlaylistFiles) {
+        if (!entry || typeof entry !== 'object' || entry.duration) continue;
+        try {
+          const result = await player.inspect(entry.path);
+          if (result && result.ok) {
+            if (Number.isFinite(result.duration)) entry.duration = result.duration;
+            if (result.mediaType === 'audio' || result.mediaType === 'video') entry.type = result.mediaType;
+            changed = true;
+          }
+        } catch (error) { /* duration stays unknown */ }
+      }
+      if (changed) updateFileDisplay();
+    }
+
+    function toggleFileList() {
+      fileListVisible = !fileListVisible;
+      updateFileDisplay();
+      const btn = document.getElementById('toggleListBtn');
+      if (btn) btn.textContent = fileListVisible ? 'Hide list' : 'View All';
+    }
+
+    function selectedEntry() {
+      if (currentFileIndex < 0 || currentFileIndex >= currentPlaylistFiles.length) return null;
+      return currentPlaylistFiles[currentFileIndex] || null;
+    }
+
+    function currentSelection() {
+      let entry = selectedEntry();
+      const selectedPath = entryPath(entry);
+      const playerPath = lastPlayerState && lastPlayerState.path ? String(lastPlayerState.path) : '';
+      let same = !!(selectedPath && playerPath && window.PlaylistUI.sameMedia(selectedPath, playerPath));
+      if (!same && recoveredFile && playerPath && window.PlaylistUI.sameMedia(recoveredFile.path, playerPath)) {
+        entry = recoveredFile;
+        same = true;
+      }
+      const status = same && lastPlayerState && lastPlayerState.status ? lastPlayerState.status : (entry ? 'ready' : 'idle');
+      const position = same && lastPlayerState && Number.isFinite(Number(lastPlayerState.position))
+        ? Number(lastPlayerState.position) : 0;
+      const duration = same && lastPlayerState && Number.isFinite(Number(lastPlayerState.duration))
+        ? Number(lastPlayerState.duration)
+        : (entry && Number.isFinite(Number(entry.duration)) ? Number(entry.duration) : 0);
+      const label = window.PlaylistUI.selectionLabel({
+        hasItem: !!entry,
+        status: status,
+        position: position
+      });
+      return { entry, same, status, position, duration, label, selectedPath };
+    }
+
+    function selectIndex(index) {
+      if (!Number.isInteger(index) || index < 0 || index >= currentPlaylistFiles.length) return false;
+      currentFileIndex = index;
+      recoveredFile = null;
+      recoveryError = '';
+      const file = entryPath(selectedEntry());
+      const master = document.getElementById('masterFile');
+      const slave = document.getElementById('slaveFile');
+      if (master) master.value = file;
+      if (slave) slave.value = file;
+      updateFileDisplay();
+      return true;
+    }
+
+    function applySelectionChrome(forceScroll) {
+      const view = currentSelection();
+      const name = view.entry ? entryName(view.entry) : '';
+      setText('masterFileName', name);
+      const nameNode = document.getElementById('masterFileName');
+      if (nameNode) nameNode.title = view.selectedPath || '';
+      setText('currentItemHeadline', view.label.headline);
+      setText('currentPosition', currentPlaylistFiles.length ? String(currentFileIndex + 1) : '0');
+      setText('totalFiles', String(currentPlaylistFiles.length));
+      setText('totalFilesCount', String(currentPlaylistFiles.length));
+      setText('previewFile', name || 'Picture plays on the playout display.');
+      setText('infoFile', name || 'No media loaded');
+      setText('previewState', view.entry ? view.label.state : 'No media loaded');
+      setText('stripState', view.entry ? view.label.state.toUpperCase() : 'IDLE');
+      setText('topPlayer', view.entry ? view.label.state : 'Idle');
+      document.querySelectorAll('.playlist-files li').forEach((item) => {
+        const index = Number(item.getAttribute('data-index'));
+        const on = index === currentFileIndex;
+        item.classList.toggle('current', on);
+        item.classList.toggle('playing', on && view.label.mode === 'playing');
+        item.classList.toggle('ready', on && view.label.mode === 'ready');
+        item.classList.toggle('paused', on && view.label.mode === 'paused');
+      });
+      if (recoveryError) {
+        setText('currentItemHeadline', 'Playback error');
+        setText('previewState', 'Error');
+        setText('stripState', 'ERROR');
+        setText('topPlayer', 'Error');
+      }
+      if (forceScroll || shownIndex !== currentFileIndex) {
+        shownIndex = currentFileIndex;
+        scrollSelectedRow();
+      }
+      publishSession();
+    }
+
+    function scrollSelectedRow() {
+      const list = document.querySelector('.playlist-files');
+      const row = list && list.querySelector('li.current');
+      if (!list || !row) return;
+      const listRect = list.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const rowTop = list.scrollTop + (rowRect.top - listRect.top);
+      const next = window.PlaylistUI.listScrollTop(list.scrollTop, list.clientHeight, rowTop, rowRect.height);
+      if (Math.abs(next - list.scrollTop) < 1) return;
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduce && typeof list.scrollTo === 'function') list.scrollTo({ top: next, behavior: 'smooth' });
+      else list.scrollTop = next;
     }
 
     function updateFileDisplay() {
-      const masterFile = document.getElementById('masterFile').value;
-      const slaveFile = document.getElementById('slaveFile').value;
       const fileInfo = document.getElementById('fileInfo');
-
-      if (masterFile && slaveFile) {
-        document.getElementById('masterFileName').textContent = masterFile;
-        document.getElementById('slaveFileName').textContent = slaveFile;
-        fileInfo.classList.add('show');
-      } else {
+      const currentFile = selectedEntry();
+      if (!fileInfo) return;
+      if (!currentFile) {
         fileInfo.classList.remove('show');
+        applyTransportVisibility();
+        applySelectionChrome();
+        return;
+      }
+      applyTransportVisibility();
+      fileInfo.classList.add('show');
+      let playlistDisplay = fileInfo.querySelector('.playlist-info');
+      if (!playlistDisplay) {
+        playlistDisplay = document.createElement('div');
+        playlistDisplay.classList.add('playlist-info');
+        fileInfo.appendChild(playlistDisplay);
+      }
+      const atLast = currentFileIndex === currentPlaylistFiles.length - 1;
+      const rows = currentPlaylistFiles.map((file, index) => {
+        const fname = escapeHtml(entryName(file));
+        const kind = typeLabel(file && file.type);
+        const durationText = file && file.duration ? formatClock(file.duration) : '—';
+        const title = escapeHtml(entryPath(file));
+        return '<li data-index="' + index + '" title="' + title + '">' +
+          (index + 1) + '. ' + fname + ' · ' + kind + ' · <span class="num">' + durationText + '</span></li>';
+      }).join('');
+      playlistDisplay.innerHTML =
+        '<div class="playlist-note">Playlist on this Mac (' + currentPlaylistFiles.length + ' files).' +
+        (currentPlaylistFiles.length > 1 && atLast ? ' Last file. Playback stops after this.' : '') + '</div>' +
+        '<ul class="playlist-files">' + rows + '</ul>';
+      applySelectionChrome(true);
+    }
+
+    function applyTransportVisibility() {
+      const nav = window.PlaylistUI.navigationState(currentFileIndex, currentPlaylistFiles.length);
+      const prevBtn = document.getElementById('prevBtn');
+      const nextBtn = document.getElementById('nextBtn');
+      if (prevBtn) {
+        prevBtn.hidden = nav.previousHidden;
+        prevBtn.disabled = nav.previousDisabled;
+      }
+      if (nextBtn) {
+        nextBtn.hidden = nav.nextHidden;
+        nextBtn.disabled = nav.nextDisabled;
+      }
+      const fullBtn = document.getElementById('fullscreenBtn');
+      if (fullBtn) {
+        const entry = currentPlaylistFiles[currentFileIndex];
+        const type = entry && typeof entry === 'object' && entry.type
+          ? entry.type
+          : window.PlaylistUI.mediaTypeFromPath(entryPath(entry));
+        const allow = window.PlaylistUI.fullscreenAvailable(type);
+        fullBtn.hidden = !allow;
+        fullBtn.disabled = !allow;
       }
     }
 
-    document.getElementById('chooseFileBtn').addEventListener('click', async function () {
-      console.log('Choose file button clicked');
-      if (window.electronAPI && window.electronAPI.openFile) {
-        console.log('Electron API available, opening file dialog...');
-        const filePath = await window.electronAPI.openFile();
-        console.log('File selected:', filePath);
-        if (filePath) {
-          console.log('Setting file paths to:', filePath);
-          document.getElementById('masterFile').value = filePath;
-          document.getElementById('slaveFile').value = filePath;
-          console.log('Calling autoSavePaths...');
-          await autoSavePaths();
-        } else {
-          console.log('No file selected');
+    let selectingNext = false;
+
+    async function cuePlaylistIndex(index) {
+      const player = localPlayer();
+      const target = entryPath(currentPlaylistFiles[index]);
+      if (!player || !target) return false;
+      const previousIndex = currentFileIndex;
+      selectIndex(index);
+      try {
+        const loaded = await player.load(target);
+        if (currentFileIndex !== index) return false;
+        if (!loaded || loaded.ok === false) {
+          selectIndex(previousIndex);
+          showPlayerResult(loaded);
+          return false;
         }
-      } else {
-        console.log('Electron API not available');
-        showResponse('File dialog not available. Are you running in Electron?', 'error');
+        if (loaded.state) lastPlayerState = loaded.state;
+        await player.pause();
+        if (currentFileIndex !== index) return false;
+        const paused = await player.getState();
+        if (currentFileIndex !== index) return false;
+        if (paused && paused.state) lastPlayerState = paused.state;
+        updateFileDisplay();
+        await mirrorLoadIfMaster(target);
+        if (currentFileIndex !== index) return false;
+        await mirrorIfMaster('pause', { position: 0, state: 'paused' });
+        if (!window.PlaylistUI.fullscreenAvailable(mediaTypeOf(target))) {
+          await player.fullscreen(false);
+          await mirrorIfMaster('fullscreen', { enabled: false });
+        }
+        return true;
+      } catch (err) {
+        if (currentFileIndex === index) selectIndex(previousIndex);
+        showResponse('Unable to select that file.', 'error', err.message);
+        return false;
       }
+    }
+
+    async function selectNextAfterEnd(event) {
+      if (selectingNext) return;
+      if (linkSnapshot && linkSnapshot.role === 'slave' && linkSnapshot.connection === 'connected') return;
+      const endedPath = event && event.state ? event.state.path : '';
+      const currentPath = entryPath(currentPlaylistFiles[currentFileIndex]);
+      const next = window.PlaylistUI.nextIndexAfterEnd(
+        currentFileIndex,
+        currentPlaylistFiles.length,
+        endedPath,
+        currentPath
+      );
+      const playAll = document.getElementById('playAllBox') && document.getElementById('playAllBox').checked;
+      const action = window.PlaylistUI.afterEndAction(!!playAll, next != null);
+      if (action === 'stay') {
+        if (currentFileIndex >= currentPlaylistFiles.length - 1 && currentPlaylistFiles.length > 0) {
+          showResponse('Last file finished.', 'info');
+        }
+        return;
+      }
+      selectingNext = true;
+      let ok = false;
+      try {
+        ok = await cuePlaylistIndex(next);
+      } finally {
+        selectingNext = false;
+      }
+      if (!ok || currentFileIndex !== next) return;
+      if (action === 'play-next') {
+        await playFile();
+        return;
+      }
+      showResponse('Next file selected at 00:00. Press Play.', 'info');
+    }
+
+    function showPage(page) {
+      document.querySelectorAll('.page').forEach((section) => {
+        section.hidden = section.getAttribute('data-page') !== page;
+      });
+      document.querySelectorAll('.nav-item').forEach((button) => {
+        const on = button.getAttribute('data-page') === page;
+        if (on) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+      });
+    }
+
+    function loadUiPrefs() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('parallelPlayout.ui') || '{}');
+        if (typeof saved.host === 'string') document.getElementById('slaveHost').value = saved.host;
+        if (saved.port) document.getElementById('slavePort').value = saved.port;
+        if (saved.listenPort) document.getElementById('listenPort').value = saved.listenPort;
+      } catch (error) { /* keep defaults */ }
+      syncSettingsFields();
+    }
+
+    function saveUiPrefs() {
+      localStorage.setItem('parallelPlayout.ui', JSON.stringify({
+        host: document.getElementById('slaveHost').value,
+        port: document.getElementById('slavePort').value,
+        listenPort: document.getElementById('listenPort').value
+      }));
+      syncSettingsFields();
+    }
+
+    function syncSettingsFields() {
+      const host = document.getElementById('slaveHost');
+      const port = document.getElementById('slavePort');
+      const listen = document.getElementById('listenPort');
+      const settingsHost = document.getElementById('settingsHost');
+      const settingsPort = document.getElementById('settingsPort');
+      const settingsListen = document.getElementById('settingsListen');
+      if (settingsHost && host && settingsHost.value !== host.value) settingsHost.value = host.value;
+      if (settingsPort && port && settingsPort.value !== port.value) settingsPort.value = port.value;
+      if (settingsListen && listen && settingsListen.value !== listen.value) settingsListen.value = listen.value;
+    }
+
+    function sessionDuration(value) {
+      if (value == null) return null;
+      const duration = Number(value);
+      return Number.isFinite(duration) ? duration : null;
+    }
+
+    function publishSession() {
+      if (!window.electronAPI || !window.electronAPI.link || !window.electronAPI.link.publishSession) return;
+      const box = document.getElementById('playAllBox');
+      window.electronAPI.link.publishSession({
+        playlist: currentPlaylistFiles.map((entry) => ({
+          path: entryPath(entry),
+          name: entryName(entry),
+          type: entry && entry.type ? entry.type : mediaTypeOf(entryPath(entry)),
+          duration: sessionDuration(entry && entry.duration),
+          sizeBytes: entry && entry.sizeBytes != null ? entry.sizeBytes : null
+        })),
+        currentIndex: currentPlaylistFiles.length ? currentFileIndex : null,
+        playAll: !!(box && box.checked)
+      }).catch(function () {});
+    }
+
+    async function failRecovery(reason) {
+      const message = reason || 'Playback could not be restored after wake.';
+      recoveryError = message;
+      recoveredFile = null;
+      showResponse(message, 'error');
+      const player = localPlayer();
+      if (!player) {
+        applySelectionChrome(true);
+        return;
+      }
+      try { await player.stop(); } catch (error) { /* already stopped */ }
+      try {
+        const after = await player.getState();
+        if (after && after.state && typeof after.state.path === 'string' && after.state.path) {
+          lastPlayerState = after.state;
+        }
+      } catch (error) { /* the error message stands */ }
+      applySelectionChrome(true);
+    }
+
+    function recoverPlayback(state) {
+      const view = window.PlaylistUI.describeRecovery(state);
+      if (!view.ok) return failRecovery(view.reason);
+      recoveryError = '';
+      recoveredFile = null;
+      if (!view.idle) {
+        const index = window.PlaylistUI.playlistIndex(currentPlaylistFiles, view.path);
+        if (index >= 0) currentFileIndex = index;
+        else {
+          recoveredFile = {
+            path: view.path,
+            name: view.name,
+            type: mediaTypeOf(view.path),
+            duration: view.duration
+          };
+        }
+      }
+      lastPlayerState = state;
+      updateFileDisplay();
+      paintPlayer(state);
+    }
+
+    function applyAuthoritativeSession(session) {
+      if (!session) return;
+      if (session.playlistKnown && Array.isArray(session.playlist)) {
+        currentPlaylistFiles = session.playlist.map((entry) => ({
+          path: entry.path,
+          name: entry.name || entryPath(entry).split('/').pop(),
+          type: entry.type || mediaTypeOf(entry.path),
+          duration: sessionDuration(entry && entry.duration)
+        }));
+      }
+      if (Number.isInteger(session.currentIndex) && session.currentIndex >= 0 && session.currentIndex < currentPlaylistFiles.length) {
+        currentFileIndex = session.currentIndex;
+      }
+      const box = document.getElementById('playAllBox');
+      if (box) box.checked = session.playAll === true;
+      const playerState = session.player || null;
+      if (playerState) recoverPlayback(playerState);
+      else updateFileDisplay();
+    }
+
+    function paintPlayer(state) {
+      if (state && state.status && state.status !== 'idle') {
+        const view = window.PlaylistUI.describeRecovery(state);
+        if (!view.ok) return;
+      }
+      lastPlayerState = state || null;
+      const view = currentSelection();
+      const position = view.position;
+      const duration = view.duration;
+      const rate = state && Number.isFinite(state.rate) ? state.rate : 1;
+      const file = view.entry ? entryName(view.entry) : '';
+      const transport = view.same && state && state.status ? state.status : view.status;
+      setLamp('topPlayerLamp', transport === 'playing' ? 'ok' : (transport === 'error' || transport === 'failed' ? 'bad' : (transport === 'paused' || transport === 'loading' ? 'warn' : '')));
+      setText('stripTime', formatClock(position) + ' / ' + formatClock(duration));
+      setText('stripRate', formatRate(rate));
+      document.querySelector('.preview').classList.toggle('empty', !file);
+      setText('previewTime', formatClock(position));
+      applySelectionChrome();
+      setText('infoDuration', duration > 0 ? formatClock(duration) : '—');
+      setText('infoPosition', file ? formatClock(position) : '—');
+      setText('infoRemain', duration > 0 ? formatClock(Math.max(0, duration - position)) : '—');
+      setText('infoRate', formatRate(rate));
+      if (state && state.path && duration > 0) {
+        const entry = currentPlaylistFiles.find((item) => entryPath(item) === state.path);
+        if (entry && typeof entry === 'object' && !entry.duration) {
+          entry.duration = duration;
+          entry.type = entry.type || mediaTypeOf(state.path);
+          updateFileDisplay();
+        }
+      }
+      setText('timelineNow', formatClock(position));
+      setText('timelineEnd', formatClock(duration));
+      const timeline = document.getElementById('timeline');
+      if (timeline && !timelineDragging) {
+        timeline.max = duration > 0 ? String(duration) : '0';
+        timeline.value = String(Math.min(position, duration || position));
+        timeline.disabled = !(duration > 0);
+      }
+      const avReady = Boolean(file) && transport !== 'error' && transport !== 'failed';
+      setText('avStatus', avReady ? 'Ready' : (transport === 'error' || transport === 'failed' ? 'Error' : 'No media'));
+      setLamp('avLamp', avReady ? 'ok' : (transport === 'error' || transport === 'failed' ? 'bad' : ''));
+      const engineUp = engineState === 'running';
+      setText('engineStatus', engineState === 'running' ? 'Running' : (engineState === 'restarting' ? 'Restarting' : (engineState === 'stopped' ? 'Unavailable' : 'Starting')));
+      setLamp('engineLamp', engineUp ? 'ok' : (engineState === 'stopped' ? 'bad' : 'warn'));
+    }
+
+    async function refreshPlayer() {
+      if (!window.electronAPI || !window.electronAPI.player) return;
+      try {
+        const result = await window.electronAPI.player.getState();
+        if (!result || result.ok === false) {
+          if (engineState !== 'restarting') engineState = 'stopped';
+          paintPlayer(null);
+          return;
+        }
+        engineState = 'running';
+        paintPlayer(result.state || {});
+      } catch (error) {
+        engineState = 'stopped';
+        paintPlayer(null);
+      }
+    }
+
+    document.getElementById('chooseSingleFileBtn').addEventListener('click', async function () {
+      if (window.electronAPI && window.electronAPI.openSingleFile) {
+        try {
+          const filePaths = await window.electronAPI.openSingleFile();
+          if (!filePaths || filePaths === null) {
+            showResponse('File selection cancelled.', 'info');
+            return;
+          }
+          if (filePaths && filePaths.length > 0) {
+            currentPlaylistFiles = filePaths.map(asEntry);
+            fileListVisible = false;
+            selectIndex(0);
+            showResponse('Loading file.', 'info');
+            await loadSelectedIntoPlayer();
+          } else showResponse('No file was selected.', 'warning');
+        } catch (error) {
+          showResponse('Unable to select a file.', 'error', error.message);
+        }
+      } else showResponse('File dialog is not available. Start the app with Electron.', 'error');
     });
 
-    document.getElementById('changeFileBtn').addEventListener('click', function () {
-      document.getElementById('fileInfo').classList.remove('show');
-      // Clear the file inputs to allow new selection
-      document.getElementById('masterFile').value = '';
-      document.getElementById('slaveFile').value = '';
+    document.getElementById('chooseFileBtn').addEventListener('click', async function () {
+      if (window.electronAPI && window.electronAPI.openFile) {
+        try {
+          const filePaths = await window.electronAPI.openFile();
+          if (!filePaths || filePaths === null) {
+            showResponse('File selection cancelled.', 'info');
+            return;
+          }
+          if (filePaths && filePaths.length > 0) {
+            currentPlaylistFiles = filePaths.map(asEntry);
+            fileListVisible = true;
+            selectIndex(0);
+            showResponse('Loading ' + currentPlaylistFiles.length + ' file(s) into the playlist.', 'info');
+            await loadSelectedIntoPlayer();
+          } else showResponse('No files were selected.', 'warning');
+        } catch (error) {
+          showResponse(error.message || 'Unable to select files.', 'error');
+        }
+      } else showResponse('File dialog is not available. Start the app with Electron.', 'error');
     });
 
     window.onload = function () {
-      if (!window.electronAPI) {
-        showResponse('This app must be run using Electron (npm start).', 'error');
-      }
-
-      // Add event listeners for speed radio buttons
-      const speedRadios = document.querySelectorAll('input[name="speed"]');
-      speedRadios.forEach(radio => {
-        radio.addEventListener('change', function () {
-          if (this.checked) {
-            setSpeed(parseFloat(this.value));
-          }
-        });
+      loadUiPrefs();
+      document.querySelectorAll('.nav-item').forEach((button) => {
+        button.addEventListener('click', () => showPage(button.getAttribute('data-page')));
       });
-
-      // Add event listener for reset speed button
-      document.addEventListener('click', function (e) {
-        if (e.target && e.target.textContent === 'Reset Speed to 1.0x') {
-          // Check the 1.0x radio button when reset is clicked
-          const speed10Radio = document.getElementById('speed10');
-          if (speed10Radio) {
-            speed10Radio.checked = true;
-          }
+      ['slaveHost', 'slavePort', 'listenPort'].forEach((id) => {
+        document.getElementById(id).addEventListener('change', saveUiPrefs);
+      });
+      document.getElementById('settingsHost').addEventListener('input', (event) => {
+        document.getElementById('slaveHost').value = event.target.value;
+        saveUiPrefs();
+      });
+      document.getElementById('settingsPort').addEventListener('input', (event) => {
+        document.getElementById('slavePort').value = event.target.value;
+        saveUiPrefs();
+      });
+      document.getElementById('settingsListen').addEventListener('input', (event) => {
+        document.getElementById('listenPort').value = event.target.value;
+        saveUiPrefs();
+      });
+      const timeline = document.getElementById('timeline');
+      timeline.addEventListener('pointerdown', () => { timelineDragging = true; });
+      timeline.addEventListener('input', () => setText('timelineNow', formatClock(Number(timeline.value))));
+      timeline.addEventListener('change', async () => {
+        timelineDragging = false;
+        document.getElementById('seekValue').value = Number(timeline.value).toFixed(2);
+        await seekTo();
+      });
+      timeline.addEventListener('pointerup', () => { timelineDragging = false; });
+      if (!window.electronAPI || !window.electronAPI.player) {
+        showResponse('This app must be run with Electron.', 'error');
+        paintPlayer(null);
+        return;
+      }
+      window.electronAPI.player.onEvent(function (event) {
+        if (!event || !event.event) return;
+        if (event.event === 'helper-crashed') {
+          engineState = 'restarting';
+          paintPlayer(null);
+          showResponse('The playback engine stopped unexpectedly and is restarting.', 'error');
+        } else if (event.event === 'helper-failed') {
+          engineState = 'stopped';
+          paintPlayer(null);
+          showResponse(event.error || 'Playback engine failed.', 'error');
+        } else if (event.event === 'error' && event.error) {
+          showResponse(describePlayerError(event.error), 'error', event.error);
+        } else if (event.event === 'ended') {
+          if (event.state) paintPlayer(event.state);
+          selectNextAfterEnd(event);
+        } else if (event.event === 'wake') {
+          recoverPlayback(event.state || null);
         }
       });
-
-      fetch('http://localhost:3000/paths.txt')
-        .then(r => r.text())
-        .then(txt => {
-          const lines = txt.split(/\r?\n/);
-          lines.forEach(line => {
-            if (line.startsWith('MASTER_VIDEO_PATH=')) {
-              document.getElementById('masterFile').value = line.replace('MASTER_VIDEO_PATH=', '');
-            }
-            if (line.startsWith('SLAVE_VIDEO_PATH=')) {
-              document.getElementById('slaveFile').value = line.replace('SLAVE_VIDEO_PATH=', '');
-            }
-          });
-          updateFileDisplay();
-        })
-        .catch(() => {
-          showResponse('Ready to control playback', 'info');
+      document.querySelectorAll('input[name="speed"]').forEach((radio) => {
+        radio.addEventListener('change', function () {
+          if (this.checked) setSpeed(parseFloat(this.value));
         });
+      });
+      showResponse('Local player ready on this Mac. Clock sync does not synchronize the video.', 'info');
+      if (window.electronAPI.link) {
+        window.electronAPI.link.onEvent(function (event) {
+          try {
+            if (event && event.event === 'execution') paintExecution(event);
+            if (event && event.event === 'wake') recoverPlayback(event.state || null);
+            if (event && event.event === 'session') applyAuthoritativeSession(event.session);
+            if (event && event.event === 'paired' && event.snapshot && event.snapshot.role === 'master') {
+              publishSession();
+              const entry = currentPlaylistFiles[currentFileIndex];
+              const file = entry ? entryPath(entry) : '';
+              if (file) mirrorLoadIfMaster(file);
+            }
+            if (event && event.event === 'session-error') {
+              if (event.stop) failRecovery(event.error);
+              else showResponse(event.error || 'The master did not send its playback state.', 'error');
+            }
+            if (event && event.snapshot) paintLink(event.snapshot);
+            else if (event && event.role) paintLink(event);
+          } catch (error) {
+            showResponse('Connection update failed.', 'error', error && error.message);
+          }
+        });
+        window.electronAPI.link.snapshot().then(function (result) {
+          if (result && result.snapshot) paintLink(result.snapshot);
+        }).catch(function () {});
+      }
+      applyTransportVisibility();
+      refreshPlayer();
+      setInterval(refreshPlayer, 500);
+    };
+
+    function seekMirrorPayload(result, seconds) {
+      const payload = { seconds: seconds };
+      const status = result && result.state && result.state.status;
+      if (status === 'playing' || status === 'paused') payload.state = status;
+      return payload;
+    }
+
+    function connectionTraceSummary(snapshot) {
+      const trace = snapshot && snapshot.connectionTrace;
+      if (!trace) return '';
+      if (trace.lastFailedStageLabel) {
+        return trace.lastFailedStageLabel + (trace.lastFailedDetail ? ' — ' + trace.lastFailedDetail : '');
+      }
+      const stages = trace.stages || [];
+      if (!stages.length) return trace.protocolNote || '';
+      const last = stages[stages.length - 1];
+      return last.label + (last.detail ? ' — ' + last.detail : '');
+    }
+
+    function paintLink(snapshot) {
+      if (!snapshot) return;
+      linkSnapshot = snapshot;
+      if (snapshot.connection !== 'connected' || snapshot.slaveMediaStatus !== 'ready') {
+        mirroredLocalPath = null;
+      } else if (snapshot.mirroredMedia) {
+        mirroredLocalPath = snapshot.mirroredMedia;
+      }
+      document.querySelectorAll('[data-role-choice]').forEach((button) => {
+        button.setAttribute('aria-pressed', button.getAttribute('data-role-choice') === snapshot.role ? 'true' : 'false');
+      });
+      const masterRow = document.getElementById('masterConnectRow');
+      const slaveRow = document.getElementById('slaveListenRow');
+      if (masterRow) masterRow.hidden = snapshot.role === 'slave';
+      if (slaveRow) slaveRow.hidden = snapshot.role !== 'slave';
+      const syncRow = document.getElementById('clockSyncRow');
+      if (syncRow) syncRow.hidden = snapshot.role === 'slave';
+      const masterActions = document.getElementById('masterActions');
+      if (masterActions) masterActions.hidden = snapshot.role === 'slave';
+      paintClock(snapshot.clock);
+      if (snapshot.lastExecution) paintSchedule(snapshot.lastExecution);
+      if (Number.isFinite(snapshot.leadMs)) setText('scheduleLeadValue', snapshot.leadMs + ' ms');
+      setText('topRole', snapshot.role === 'slave' ? 'SLAVE' : 'MASTER');
+      setText('settingsRoleValue', snapshot.role === 'slave' ? 'Slave' : 'Master');
+
+      const identity = snapshot.identity || {};
+      setText('settingsDeviceName', identity.deviceName || '—');
+      setText('slaveDeviceName', identity.deviceName || 'Parallel Playout');
+      setText('settingsMediaRoot', snapshot.mediaRoot || 'Not configured');
+
+      const peer = snapshot.peer || null;
+      const connected = snapshot.connection === 'connected' || (snapshot.role === 'slave' && snapshot.masterConnected && snapshot.authorized);
+      const reconnecting = !!snapshot.reconnecting;
+
+      let connectionLabel = 'Disconnected';
+      let connectionKind = '';
+      if (snapshot.paired && connected) {
+        connectionLabel = 'Paired';
+        connectionKind = 'ok';
+      } else if (snapshot.paired && reconnecting) {
+        connectionLabel = 'Reconnecting';
+        connectionKind = 'warn';
+      } else if (snapshot.paired) {
+        connectionLabel = 'Paired · Disconnected';
+        connectionKind = 'warn';
+      } else if (snapshot.role === 'slave' && snapshot.listening) {
+        connectionLabel = 'Listening';
+        connectionKind = 'warn';
+      } else if (snapshot.slaveUnavailable) {
+        connectionLabel = 'Slave unavailable';
+        connectionKind = 'warn';
+      } else if (snapshot.pairingState === 'requesting' && snapshot.lastPairError) {
+        connectionLabel = 'Slave not answering';
+        connectionKind = 'warn';
+      } else if (snapshot.pairingState === 'requesting') {
+        connectionLabel = 'Waiting';
+        connectionKind = 'warn';
+      }
+
+      setText('topConnection', connectionLabel);
+      setLamp('topConnectionLamp', connectionKind);
+      setText('netStatus', connectionLabel);
+      setLamp('netLamp', connectionKind);
+
+      // Master connection card
+      const addPanel = document.getElementById('addSlavePanel');
+      const masterPairActions = document.getElementById('masterPairActions');
+      if (snapshot.role !== 'slave') {
+        if (peer) {
+          setText('pairedSlaveName', peer.deviceName || 'Paired Slave');
+          setText('pairedSlaveHost', peer.host || snapshot.host || '');
+          if (connected) {
+            setText('masterLinkLabel', '● Connected');
+            setLamp('masterLinkLamp', 'ok');
+          } else if (reconnecting) {
+            setText(
+              'masterLinkLabel',
+              '○ Disconnected · Reconnecting…' + (snapshot.lastPairError ? ' ' + snapshot.lastPairError : '')
+            );
+            setLamp('masterLinkLamp', 'warn');
+          } else {
+            setText('masterLinkLabel', '○ Disconnected');
+            setLamp('masterLinkLamp', '');
+          }
+          if (addPanel) addPanel.hidden = true;
+          if (masterPairActions) masterPairActions.hidden = false;
+          setText('masterEndpoint', (peer.host || '') + (peer.port ? ':' + peer.port : ''));
+          setText('pairRequestStatus', '');
+      } else {
+          setText('pairedSlaveName', 'No Slave paired');
+          setText('pairedSlaveHost', '');
+          setText('masterLinkLabel', 'Not paired');
+          setLamp('masterLinkLamp', '');
+          if (addPanel) addPanel.hidden = false;
+          if (masterPairActions) masterPairActions.hidden = true;
+          setText('masterEndpoint', 'No slave selected');
+          if (snapshot.pairingState === 'requesting') {
+            const traceHint = connectionTraceSummary(snapshot);
+            setText(
+              'pairRequestStatus',
+              snapshot.slaveUnavailable
+                ? 'Slave unavailable'
+                : snapshot.lastPairError ||
+                  (traceHint && /hello response|pairRequest response|pair-request sent to UI/i.test(traceHint)
+                    ? 'REQUEST SENT — Waiting for approval from Slave…'
+                    : traceHint || 'REQUEST SENT — Waiting for approval from Slave…')
+            );
+          } else if (snapshot.pairingState === 'rejected' && snapshot.lastPairError) {
+            setText('pairRequestStatus', snapshot.lastPairError);
+          } else {
+            setText('pairRequestStatus', '');
+          }
+          setText('connectionTraceStatus', connectionTraceSummary(snapshot));
+        }
+        // Slave media status on player
+        if (!snapshot.paired) setText('infoSlaveMedia', '—');
+        else if (snapshot.slaveMediaStatus === 'ready') setText('infoSlaveMedia', '● Ready');
+        else if (snapshot.slaveMediaStatus === 'missing') setText('infoSlaveMedia', '⚠ Media missing');
+        else if (snapshot.slaveMediaStatus === 'disconnected') setText('infoSlaveMedia', '○ Disconnected');
+        else if (snapshot.slaveMediaStatus === 'error') setText('infoSlaveMedia', '⚠ Error');
+        else if (connected) setText('infoSlaveMedia', '● Paired');
+        else setText('infoSlaveMedia', '○ Waiting');
+      }
+
+      // Slave connection card
+      if (snapshot.role === 'slave') {
+        setText('connectionTraceStatus', connectionTraceSummary(snapshot));
+        setText('slaveListenLabel', snapshot.listening ? '● Listening' : 'Not listening');
+        setLamp('slaveListenLamp', snapshot.listening ? 'ok' : '');
+        setText('slaveAddress', '0.0.0.0:' + snapshot.port);
+        const slavePairActions = document.getElementById('slavePairActions');
+        if (peer) {
+          setText('pairedMasterName', peer.deviceName || 'Paired Master');
+          setText('pairedMasterHost', peer.host || '');
+          if (connected) setText('slaveMasterLabel', '● Connected');
+          else setText('slaveMasterLabel', 'Waiting for paired Master…');
+          if (slavePairActions) slavePairActions.hidden = false;
+      } else {
+          setText('pairedMasterName', 'No Master paired');
+          setText('pairedMasterHost', '');
+          setText('slaveMasterLabel', snapshot.listening ? 'Listening for requests' : 'Waiting');
+          if (slavePairActions) slavePairActions.hidden = true;
+        }
+        const incoming = document.getElementById('incomingPairPanel');
+        const pending = snapshot.pendingPairRequest;
+        const requestText = pending && pending.deviceId
+          ? 'Parallel Playout Master at ' + (pending.host || 'unknown') + ' wants to connect.'
+          : '';
+        if (incoming) {
+          if (requestText) {
+            incoming.hidden = false;
+            setText('incomingPairName', 'Connection Request');
+            setText('incomingPairHost', requestText);
+          } else {
+            incoming.hidden = true;
+          }
+        }
+        const popup = document.getElementById('connectionRequestPopup');
+        if (popup) {
+          if (requestText) {
+            setText('connectionRequestBody', requestText);
+            popup.hidden = false;
+          } else {
+            popup.hidden = true;
+          }
+        }
+      } else {
+        const popup = document.getElementById('connectionRequestPopup');
+        if (popup) popup.hidden = true;
+      }
+
+      const firewallBanner = document.getElementById('slaveFirewallBanner');
+      if (firewallBanner) {
+        const fw = snapshot.role === 'slave' ? snapshot.firewall : null;
+        let fwText = '';
+        if (fw && fw.blocked) {
+          fwText = 'macOS Firewall is blocking connections to Parallel Playout, so the Master cannot connect. Open System Settings › Network › Firewall › Options and set Parallel Playout to Allow incoming connections.';
+        } else if (fw && fw.enabled && !fw.listed) {
+          fwText = 'macOS Firewall has not approved Parallel Playout yet. When macOS asks whether Parallel Playout may accept incoming connections, choose Allow, or add it in System Settings › Network › Firewall › Options.';
+        }
+        setText('slaveFirewallText', fwText);
+        firewallBanner.hidden = !fwText;
+      }
+
+      const waitBanner = document.getElementById('slaveWaitBanner');
+      if (waitBanner) {
+        if (snapshot.role === 'slave' && peer && !connected) {
+          const who = (peer.deviceName || 'the paired Master') + (peer.host ? ' at ' + peer.host : '');
+          setText('slaveWaitText', 'Paired with ' + who + ', but that Master is not connected. Remove the connection before pairing a different Master.');
+          waitBanner.hidden = false;
+        } else {
+          waitBanner.hidden = true;
+        }
+      }
+
+      const line = document.getElementById('linkStatusLine');
+      if (!line) return;
+      if (snapshot.role === 'slave') {
+        if (peer && connected) line.textContent = 'Slave. Paired and connected to Master.';
+        else if (peer) line.textContent = 'Slave. Paired. Waiting for Master…';
+        else if (snapshot.pendingPairRequest) line.textContent = 'Slave. Connection request waiting for approval.';
+        else if (snapshot.listening) line.textContent = 'Slave. Listening for a connection request.';
+        else line.textContent = 'Slave. Not listening.';
+      } else if (peer && connected) {
+        line.textContent = 'Master. Paired and connected to Slave.';
+      } else if (peer && reconnecting) {
+        line.textContent = 'Master. Paired. Reconnecting…';
+      } else if (peer) {
+        line.textContent = 'Master. Paired. Disconnected.';
+      } else if (snapshot.slaveUnavailable) {
+        line.textContent = 'Master. Slave unavailable.';
+      } else if (snapshot.pairingState === 'requesting' && snapshot.lastPairError) {
+        line.textContent = 'Master. Slave did not answer. Retrying…';
+      } else if (snapshot.pairingState === 'requesting') {
+        line.textContent = 'Master. Waiting for Slave approval…';
+      } else {
+        line.textContent = 'Master. No Slave paired.';
+      }
+    }
+
+    async function requestSlavePairing() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const host = document.getElementById('slaveHost').value.trim();
+      const port = Number(document.getElementById('slavePort').value) || 47631;
+      if (!host) {
+        showResponse('Enter the Slave address.', 'error');
+        return;
+      }
+      saveUiPrefs();
+      setText('pairRequestStatus', 'Requesting connection…');
+      showResponse('Requesting connection to Slave…', 'info');
+      const result = await window.electronAPI.link.requestPairing(host, port);
+      if (result && result.replaced) return;
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (!result || result.ok === false || !result.snapshot || result.snapshot.paired !== true) {
+        const unavailable = result && result.snapshot && result.snapshot.slaveUnavailable;
+        const raw = (result && result.error) || 'Connection request failed.';
+        const msg = unavailable ? 'Slave unavailable' : (typeof raw === 'string' ? raw : (raw.message || 'Connection request rejected.'));
+        setText('pairRequestStatus', msg);
+        showResponse(msg, 'error');
+      } else {
+        setText('pairRequestStatus', 'CONNECTED — Slave paired.');
+        showResponse('Slave paired.', 'success');
+      }
+    }
+
+    async function acceptIncomingPair() {
+      if (!window.electronAPI || !window.electronAPI.link || !linkSnapshot) return;
+      const pending = linkSnapshot.pendingPairRequest;
+      if (!pending || !pending.requestId) {
+        showResponse('No connection request to accept.', 'error');
+        return;
+      }
+      const result = await window.electronAPI.link.acceptPairing(pending.requestId);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (!result || result.ok === false) showResponse((result && result.error) || 'Could not accept.', 'error');
+      else showResponse('Master paired. This Master can control this Slave.', 'success');
+    }
+
+    async function rejectIncomingPair() {
+      if (!window.electronAPI || !window.electronAPI.link || !linkSnapshot) return;
+      const pending = linkSnapshot.pendingPairRequest;
+      if (!pending || !pending.requestId) {
+        showResponse('No connection request to reject.', 'error');
+        return;
+      }
+      const result = await window.electronAPI.link.rejectPairing(pending.requestId);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      showResponse('Connection request rejected.', 'info');
+    }
+
+    async function confirmUnpair() {
+      if (!window.electronAPI || !window.electronAPI.link || !linkSnapshot) return;
+      const peer = linkSnapshot.peer;
+      const name = peer ? ((peer.deviceName || peer.host || 'the other machine')) : 'the paired device';
+      const host = peer && peer.host ? ' (' + peer.host + ')' : '';
+      const ok = window.confirm(
+        'Remove connection?\n\n' + name + host + ' will no longer be trusted.\n\nFuture connections will require approval again.'
+      );
+      if (!ok) return;
+      const result = await window.electronAPI.link.unpair();
+      if (result && result.snapshot) paintLink(result.snapshot);
+      showResponse('Connection removed.', 'info');
+    }
+
+    async function chooseMediaRoot() {
+      if (!window.electronAPI || !window.electronAPI.openDirectory) return;
+      const dir = await window.electronAPI.openDirectory();
+      if (!dir) return;
+      const result = await window.electronAPI.link.setMediaRoot(dir);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (!result || result.ok === false) showResponse((result && result.error) || 'Could not save media directory.', 'error');
+      else showResponse('Media directory set to ' + dir, 'success');
+    }
+
+    async function chooseRole(role) {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      if (linkSnapshot && linkSnapshot.paired && linkSnapshot.role !== role) {
+        const ok = window.confirm(
+          'Changing role requires removing the current pairing.\n\nRemove the connection and switch to ' +
+          (role === 'slave' ? 'Slave' : 'Master') + '?'
+        );
+        if (!ok) return;
+        const removed = await window.electronAPI.link.unpair();
+        if (removed && removed.snapshot) paintLink(removed.snapshot);
+      }
+      showResponse(role === 'slave' ? 'Switching to Slave...' : 'Switching to Master...', 'info');
+      const result = await window.electronAPI.link.setRole(role);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (result && result.ok === false) {
+        const message = typeof result.error === 'string' ? result.error : ((result.error && result.error.message) || 'Could not change role.');
+        showResponse(message, 'error');
+        return;
+      }
+      if (role === 'slave') {
+        const port = result && result.snapshot ? result.snapshot.port : 47631;
+        showResponse('Listening on port ' + port + '.', 'success');
+      } else {
+        showResponse('This Mac is the Master.', 'success');
+      }
+    }
+
+    async function connectSlave() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const host = document.getElementById('slaveHost').value.trim();
+      const port = Number(document.getElementById('slavePort').value);
+      saveUiPrefs();
+      const result = await window.electronAPI.link.connect(host, port);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (!result || result.ok === false) {
+        const described = describeFailure(result && result.error, host, port);
+        showResponse(described.summary, 'error', described.technical);
+      } else showResponse('Connected to the slave. Playback is not synchronized yet.', 'success');
+    }
+
+    async function disconnectLink() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const result = await window.electronAPI.link.disconnect();
+      if (result && result.snapshot) paintLink(result.snapshot);
+      showResponse('Disconnected.', 'info');
+    }
+
+    async function listenAsSlave() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const port = Number(document.getElementById('listenPort').value);
+      saveUiPrefs();
+      const result = await window.electronAPI.link.listen(port);
+      if (result && result.snapshot) paintLink(result.snapshot);
+      if (!result || result.ok === false) showResponse((result && result.error) || 'Could not listen.', 'error');
+      else showResponse('Listening for a master on port ' + result.snapshot.port + '.', 'success');
+    }
+
+    function formatSignedMs(value) {
+      if (!Number.isFinite(value)) return '—';
+      const sign = value > 0 ? '+' : '';
+      return sign + value.toFixed(3) + ' ms';
+    }
+
+    function formatMs(value) {
+      if (!Number.isFinite(value)) return '—';
+      return value.toFixed(3) + ' ms';
+    }
+
+    function paintClock(clock) {
+      const synchronized = Boolean(clock && clock.synchronized);
+      setText('clockStatusLine', synchronized ? 'Synchronized' : 'Unsynchronized');
+      setText('clockOffsetLine', formatSignedMs(clock && clock.offsetMs));
+      setText('clockRttLine', formatMs(clock && clock.rttMs));
+      setText('clockJitterLine', formatMs(clock && clock.jitterMs));
+      setText('clockSamples', clock && Number.isFinite(clock.sampleCount) && clock.sampleCount > 0 ? String(clock.sampleCount) : '—');
+      setText('clockLastLine', clock && clock.lastSyncWall ? clock.lastSyncWall : '—');
+      setText('clockHealth', synchronized ? 'Synchronized' : 'Unsynchronized');
+      setLamp('clockHealthLamp', synchronized ? 'ok' : '');
+    }
+
+    function paintSchedule(event) {
+      if (!event || !Number.isFinite(event.errorMs)) return;
+      lastExecution = event;
+      setText('schedTarget', Number.isFinite(event.localTargetTime) ? event.localTargetTime.toFixed(3) + ' ms' : '—');
+      setText('schedActual', Number.isFinite(event.actualLocalTime) ? event.actualLocalTime.toFixed(3) + ' ms' : '—');
+      setText('schedError', formatSignedMs(event.errorMs));
+      setText('clockExecutionLine', 'Execution error ' + formatSignedMs(event.errorMs) + '. This is the command time, not the first video frame.');
+    }
+
+    function paintExecution(event) {
+      paintSchedule(event);
+      if (!event || !Number.isFinite(event.errorMs)) return;
+      showResponse('Scheduled command fired. Error ' + formatSignedMs(event.errorMs) + '. This is not frame-accurate video sync.', 'info');
+    }
+
+    async function syncClock() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      showResponse('Measuring clock offset.', 'info');
+      const result = await window.electronAPI.link.syncClock();
+      if (result && result.snapshot) paintLink(result.snapshot);
+      else if (result && result.clock) paintClock(result.clock);
+      if (!result || result.ok === false) {
+        const described = describeFailure(result && result.error);
+        showResponse(described.summary || 'Clock sync failed.', 'error', described.technical);
+        return;
+      }
+      const clock = result.clock;
+      showResponse('Clock estimate from ' + clock.sampleCount + ' samples. Offset ' + formatSignedMs(clock.offsetMs) + ', RTT ' + formatMs(clock.rttMs) + ', jitter ' + formatMs(clock.jitterMs) + '. Video is not synchronized.', 'success');
+    }
+
+    async function scheduledPlayTest() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const result = await window.electronAPI.link.scheduledPlayTest();
+      if (!result || result.ok === false) {
+        const described = describeFailure(result && result.error);
+        showResponse(described.summary || 'Could not schedule playback.', 'error', described.technical);
+        return;
+      }
+      const plan = result.plan || result.payload || {};
+      setText('schedTarget', Number.isFinite(plan.localTargetTime) ? plan.localTargetTime.toFixed(3) + ' ms' : '—');
+      showResponse('Playback scheduled. Lead ' + plan.leadMs + ' ms. Start has not been confirmed.', 'info');
+    }
+
+    async function pingSlave() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const result = await window.electronAPI.link.ping();
+      if (result && result.ok) showResponse('Slave answered. This is not synchronized playback.', 'success');
+      else {
+        const described = describeFailure(result && result.error, document.getElementById('slaveHost').value.trim(), document.getElementById('slavePort').value);
+        showResponse(described.summary, 'error', described.technical);
+      }
+    }
+
+    async function getSlaveStatus() {
+      if (!window.electronAPI || !window.electronAPI.link) return;
+      const result = await window.electronAPI.link.getRemoteStatus();
+      if (!result || result.ok === false) {
+        const described = describeFailure(result && result.error);
+        showResponse(described.summary || 'Could not read slave status.', 'error', described.technical);
+        return;
+      }
+      const status = result.payload;
+      const file = status.file ? status.file.split('/').pop() : 'no file';
+      showResponse('Slave ' + status.state + ' at ' + Number(status.position).toFixed(2) + 's, ' + status.rate + '×, ' + file + '.', 'success');
+    }
+
+    async function nextFile() {
+      const nav = window.PlaylistUI.navigationState(currentFileIndex, currentPlaylistFiles.length);
+      if (nav.nextDisabled) {
+        if (currentPlaylistFiles.length > 1) showResponse('This is the last file in the playlist.', 'info');
+        return;
+      }
+      const ok = await cuePlaylistIndex(currentFileIndex + 1);
+      if (ok) showResponse('Selected file ' + (currentFileIndex + 1) + '/' + currentPlaylistFiles.length + '. Press Play.', 'info');
+    }
+
+    async function previousFile() {
+      const nav = window.PlaylistUI.navigationState(currentFileIndex, currentPlaylistFiles.length);
+      if (nav.previousDisabled) {
+        if (currentPlaylistFiles.length > 1) showResponse('This is the first file in the playlist.', 'info');
+        return;
+      }
+      const ok = await cuePlaylistIndex(currentFileIndex - 1);
+      if (ok) showResponse('Selected file ' + (currentFileIndex + 1) + '/' + currentPlaylistFiles.length + '. Press Play.', 'info');
+    }
+
+    async function playFile() {
+      if (currentPlaylistFiles.length === 0) {
+        showResponse('Open a file first.', 'error');
+        return;
+      }
+      recoveryError = '';
+      const player = localPlayer();
+      if (!player) return;
+      try {
+        const startedIndex = currentFileIndex;
+        const before = await player.getState();
+        if (currentFileIndex !== startedIndex) return;
+        const position = before && before.state && Number.isFinite(before.state.position) ? before.state.position : null;
+        const entry = currentPlaylistFiles[currentFileIndex];
+        const file = entryPath(entry);
+        const type = entry && typeof entry === 'object' && entry.type
+          ? entry.type
+          : mediaTypeOf(file);
+        if (file && linkSnapshot && linkSnapshot.role === 'master' && linkSnapshot.paired) {
+          await mirrorLoadIfMaster(file);
+        }
+        if (window.PlaylistUI.fullscreenAvailable(type)) {
+          const already = before && before.state && before.state.fullscreen === true;
+          if (!already) {
+            const full = await player.fullscreen(true);
+            if (!full || full.ok === false) {
+              showPlayerResult(full, '');
+              return;
+            }
+          }
+          await mirrorIfMaster('fullscreen', { enabled: true });
+        }
+        if (currentFileIndex !== startedIndex) return;
+        const result = await player.play();
+        if (currentFileIndex !== startedIndex) return;
+        if (showPlayerResult(result, 'Playing.')) {
+          const payload = { state: 'playing' };
+          if (position != null) payload.position = position;
+          await mirrorIfMaster('play', payload);
+        }
+      } catch (err) {
+        showResponse('Play failed.', 'error', err.message);
+      }
+    }
+
+    async function pauseFile() {
+      recoveryError = '';
+      const player = localPlayer();
+      if (!player) return;
+      try {
+        const before = await player.getState();
+        const position = before && before.state && Number.isFinite(before.state.position) ? before.state.position : null;
+        const result = await player.pause();
+        if (showPlayerResult(result, 'Paused.')) {
+          const payload = { state: 'paused' };
+          if (position != null) payload.position = position;
+          await mirrorIfMaster('pause', payload);
+        }
+      } catch (err) {
+        showResponse('Pause failed.', 'error', err.message);
+      }
+    }
+
+    async function openSlaveApp() {
+      if (!window.electronAPI || !window.electronAPI.link || !window.electronAPI.link.openSlaveApp) return;
+      if (!linkSnapshot || !linkSnapshot.paired) {
+        showResponse('Pair a Slave before opening its app.', 'error');
+        return;
+      }
+      showResponse('Opening Parallel Playout on the slave.', 'info');
+      try {
+        const result = await window.electronAPI.link.openSlaveApp();
+        if (!result || result.ok === false) {
+          const described = describeFailure(result && result.error);
+          showResponse(described.summary || 'Could not open the slave app.', 'error', described.technical);
+          return;
+        }
+        const already = result.payload && result.payload.alreadyRunning;
+        showResponse(already ? 'Slave app is open.' : 'Slave app launched.', 'success');
+      } catch (err) {
+        showResponse('Could not open the slave app.', 'error', err.message);
+      }
+    }
+
+    async function stopFile() {
+      recoveryError = '';
+      const player = localPlayer();
+      if (!player) return;
+      try {
+        const result = await player.stop();
+        if (showPlayerResult(result, 'Stopped at 00:00. Play starts this item from the beginning.')) {
+          await mirrorIfMaster('stop', {});
+        }
+      } catch (err) {
+        showResponse('Stop failed.', 'error', err.message);
+      }
     }
   </script>
 </body>
-
 </html>
