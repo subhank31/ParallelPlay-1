@@ -454,7 +454,9 @@ final class PlayerController: NSObject, NSWindowDelegate {
         guard player.currentItem != nil else { return "No file is loaded." }
         player.playImmediately(atRate: Float(desiredRate))
         status = .playing
-        engineLog(String(format: "play at %.2f", player.currentTime().seconds))
+        // No position in these logs: reading currentTime() around a rate change
+        // delays the reply (~90 ms on play, ~30 ms on pause).
+        engineLog("play")
         refreshCursor()
         return nil
     }
@@ -469,7 +471,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
         if status != .ended {
             status = .paused
         }
-        engineLog(String(format: "pause at %.2f", player.currentTime().seconds))
+        engineLog("pause")
         refreshCursor()
         return nil
     }
