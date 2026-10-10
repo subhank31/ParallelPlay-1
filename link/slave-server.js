@@ -577,6 +577,7 @@ class SlaveServer extends EventEmitter {
       });
       if (result.ok) {
         this._write(socket, success(message.requestId, result.payload));
+        if (message.type === 'load') this.emit('mirrored-load', result.payload);
       } else {
         this._write(
           socket,

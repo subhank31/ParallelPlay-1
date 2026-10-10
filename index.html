@@ -1327,12 +1327,13 @@
       applySelectionChrome(true);
     }
 
-    function recoverPlayback(state) {
+    function recoverPlayback(state, selectedIndex) {
       const view = window.PlaylistUI.describeRecovery(state);
       if (!view.ok) return failRecovery(view.reason);
       recoveryError = '';
       recoveredFile = null;
-      if (!view.idle) {
+      if (Number.isInteger(selectedIndex)) currentFileIndex = selectedIndex;
+      else if (!view.idle) {
         const index = window.PlaylistUI.playlistIndex(currentPlaylistFiles, view.path);
         if (index >= 0) currentFileIndex = index;
         else {
@@ -1360,15 +1361,16 @@
           missing: entry.missing === true
         }));
       }
-      if (Number.isInteger(session.currentIndex) && session.currentIndex >= 0 && session.currentIndex < currentPlaylistFiles.length) {
-        currentFileIndex = session.currentIndex;
-      } else if (currentFileIndex >= currentPlaylistFiles.length) {
-        currentFileIndex = 0;
-      }
+      const masterIndex = Number.isInteger(session.currentIndex) && session.currentIndex >= 0 &&
+        session.currentIndex < currentPlaylistFiles.length ? session.currentIndex : null;
+      if (masterIndex != null) currentFileIndex = masterIndex;
+      else if (currentFileIndex >= currentPlaylistFiles.length) currentFileIndex = 0;
       const box = document.getElementById('playAllBox');
       if (box) box.checked = session.playAll === true;
       const playerState = session.player || null;
-      if (playerState) recoverPlayback(playerState);
+      // The Master's selection is what this list shows, even while the player
+      // here still holds the previous item, exactly as on the Master.
+      if (playerState) recoverPlayback(playerState, masterIndex);
       else updateFileDisplay();
     }
 

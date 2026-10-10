@@ -304,6 +304,7 @@ class LinkController extends EventEmitter {
       if (!current()) return;
       this.masterConnected = false;
       this.pendingPairRequest = null;
+      this._keptPush = null;
       this.emit('event', Object.assign({ event: 'master-disconnected' }, this.snapshot()));
     });
     server.on('pair-request', (request) => {
@@ -328,6 +329,15 @@ class LinkController extends EventEmitter {
     });
     server.on('session-sync', (payload) => {
       if (!current()) return;
+      this._keptPush = null;
+      this._applyMasterSession(payload, { reason: 'push' }).catch(() => {});
+    });
+    // A push can overtake the Master's Load of the next item. It is kept until
+    // that Load lands here, then shown, so the Slave list follows the Master.
+    server.on('mirrored-load', () => {
+      if (!current() || !this._keptPush) return;
+      const payload = this._keptPush;
+      this._keptPush = null;
       this._applyMasterSession(payload, { reason: 'push' }).catch(() => {});
     });
     server.on('unpaired', () => {
@@ -1293,6 +1303,7 @@ class LinkController extends EventEmitter {
     // it cannot replace this Slave's playlist either; Sync reads it back later.
     const sameItem = current.ok && !current.idle && path.resolve(current.path) === path.resolve(local.path || '');
     if (guarded && onAir && !sameItem) {
+      if (options.reason === 'push') this._keptPush = payload;
       console.error(`[link] kept Slave ${local.status} on ${path.basename(local.path)}; Master is on ${current.ok && !current.idle ? path.basename(current.path) : 'another item'} (${options.reason || 'connect'})`);
       return { ok: true, kept: true };
     }
