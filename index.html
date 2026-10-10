@@ -239,6 +239,12 @@
       background: #fffaf2;
     }
     .wait-banner[hidden] { display: none; }
+    .system-check { list-style: none; margin: 0; padding: 0; }
+    .system-check li { padding: 6px 0; border-top: 1px solid var(--line); }
+    .system-check li b { display: inline-block; min-width: 9em; }
+    .system-check li.warn b::before { content: '⚠ '; }
+    .system-check li.error b::before { content: '✕ '; color: #a33; }
+    .system-check li.ok b::before { content: '✓ '; }
     input[type="text"], input[type="number"] {
       background: #ffffff;
       border: 1px solid #d5dbe4;
@@ -369,6 +375,10 @@
       </header>
       <div id="slaveFirewallBanner" class="wait-banner" role="alert" hidden>
         <span id="slaveFirewallText"></span>
+      </div>
+      <div id="systemCheckBanner" class="wait-banner" role="alert" hidden>
+        <span id="systemCheckText"></span>
+        <button type="button" class="btn" onclick="showPage('settings')">Open Settings</button>
       </div>
       <div id="masterObserveBanner" class="wait-banner" role="status" hidden>
         <span id="masterObserveText"></span>
@@ -564,6 +574,9 @@
         <section class="page" id="page-settings" data-page="settings" hidden>
           <h1 class="page-title">Settings</h1>
           <div class="stack">
+            <div class="field-label">System check</div>
+            <ul class="system-check" id="systemCheckList"><li>Checking…</li></ul>
+            <div class="inline-actions"><button type="button" class="btn" onclick="refreshSystemCheck()">Check again</button></div>
             <div class="field-label">Role</div>
             <div class="inline-actions">
               <button type="button" class="btn" data-role-choice="master" onclick="chooseRole('master')">Master</button>
@@ -1525,12 +1538,15 @@
         });
       });
       showResponse('Local player ready on this Mac. Clock sync does not synchronize the video.', 'info');
+      refreshSystemCheck();
+      setInterval(refreshSystemCheck, 30000);
       if (window.electronAPI.link) {
         window.electronAPI.link.onEvent(function (event) {
           try {
             if (event && event.event === 'execution') paintExecution(event);
             if (event && event.event === 'wake') recoverPlayback(event.state || null);
             if (event && event.event === 'session') applyAuthoritativeSession(event.session);
+            if (event && /^(paired|unpaired|role|listening|firewall)$/.test(event.event)) refreshSystemCheck();
             // On (re)connect the Master only publishes. Reloading the Slave here
             // would interrupt it mid-playback; an idle Slave adopts the session.
             if (event && event.event === 'paired' && event.snapshot && event.snapshot.role === 'master') {
@@ -1864,6 +1880,32 @@
       showResponse('Connection removed.', 'info');
     }
 
+    // What this Mac needs for unattended live playout; problems also show as a
+    // banner on every page so they are not missed.
+    async function refreshSystemCheck() {
+      if (!window.electronAPI || !window.electronAPI.systemCheck) return null;
+      let result = null;
+      try {
+        result = await window.electronAPI.systemCheck();
+      } catch (error) {
+        return null;
+      }
+      if (!result || !Array.isArray(result.items)) return null;
+      const list = document.getElementById('systemCheckList');
+      if (list) {
+        list.innerHTML = result.items.map((item) =>
+          '<li class="' + escapeHtml(item.level) + '" data-check="' + escapeHtml(item.id) + '"><b>' + escapeHtml(item.title) +
+          '</b> ' + escapeHtml(item.detail) + '</li>').join('');
+      }
+      const urgent = result.items.filter((item) => item.level === 'error' || (item.level === 'warn' && (item.id === 'media' || item.id === 'firewall')));
+      const banner = document.getElementById('systemCheckBanner');
+      if (banner) {
+        banner.hidden = urgent.length === 0;
+        setText('systemCheckText', urgent.map((item) => item.title + ': ' + item.detail).join('  '));
+      }
+      return result;
+    }
+
     async function chooseMediaRoot() {
       if (!window.electronAPI || !window.electronAPI.openDirectory) return;
       const dir = await window.electronAPI.openDirectory();
@@ -1872,6 +1914,7 @@
       if (result && result.snapshot) paintLink(result.snapshot);
       if (!result || result.ok === false) showResponse((result && result.error) || 'Could not save media directory.', 'error');
       else showResponse('Media directory set to ' + dir, 'success');
+      refreshSystemCheck();
     }
 
     async function chooseRole(role) {

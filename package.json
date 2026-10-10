@@ -9,6 +9,7 @@
     "build:player": "swift build -c release --package-path native/PlayoutEngine --arch arm64 --arch x86_64 && mkdir -p native/PlayoutEngine/.build/release && cp native/PlayoutEngine/.build/apple/Products/Release/PlayoutEngine native/PlayoutEngine/.build/release/PlayoutEngine",
     "build:app": "npm run build:player && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --universal",
     "build:dmg": "npm run build:player && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg dir --universal",
+    "build:pkg": "npm run build:app && bash scripts/build-pkg.sh",
     "test:player": "node scripts/test-helper.js",
     "test:player:electron": "electron scripts/electron-player-test.js",
     "test:link": "node scripts/test-link.js",

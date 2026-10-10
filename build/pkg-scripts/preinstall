@@ -1,0 +1,36 @@
+#!/bin/bash
+# Runs as root before the new app is copied in.
+# Quits the running app and moves the old bundle aside, so no file from the
+# previous version is left inside the new bundle (that would break its
+# signature, and the Firewall would then drop the Master).
+
+APP="/Applications/Parallel Playout.app"
+LOG="/Library/Logs/ParallelPlayout-install.log"
+exec >>"$LOG" 2>&1
+echo "=== preinstall $(date '+%Y-%m-%d %H:%M:%S')"
+
+USER_NAME=$(/usr/bin/stat -f%Su /dev/console)
+USER_ID=$(/usr/bin/id -u "$USER_NAME" 2>/dev/null)
+
+if /usr/bin/pgrep -f "Parallel Playout.app/Contents/MacOS/Parallel Playout" >/dev/null; then
+  echo "quitting the running app"
+  if [ -n "$USER_ID" ] && [ "$USER_NAME" != "root" ]; then
+    /bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/osascript -e 'quit app "Parallel Playout"' || true
+  fi
+  for _ in $(seq 1 20); do
+    /usr/bin/pgrep -f "Parallel Playout.app/Contents/MacOS/Parallel Playout" >/dev/null || break
+    sleep 0.5
+  done
+  /usr/bin/pkill -9 -f "Parallel Playout.app/Contents/MacOS/Parallel Playout" || true
+  /usr/bin/pkill -9 -f "Parallel Playout.app/Contents/Resources/playout-engine/PlayoutEngine" || true
+fi
+
+if [ -d "$APP" ]; then
+  BACKUP_DIR="/Users/$USER_NAME"
+  [ -d "$BACKUP_DIR" ] || BACKUP_DIR="/Users/Shared"
+  echo "keeping the previous app at $BACKUP_DIR/ParallelPlayout-prev.zip"
+  /usr/bin/ditto -c -k --keepParent "$APP" "$BACKUP_DIR/ParallelPlayout-prev.zip" || true
+  /usr/sbin/chown "$USER_NAME" "$BACKUP_DIR/ParallelPlayout-prev.zip" 2>/dev/null || true
+  /bin/rm -rf "$APP"
+fi
+exit 0

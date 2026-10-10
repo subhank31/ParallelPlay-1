@@ -1,0 +1,59 @@
+#!/bin/bash
+# Runs as root after the new app is in /Applications.
+# Does everything a playout Mac needs that would otherwise be a manual step:
+#   - lets the Master reach this Mac through the macOS Firewall (this build)
+#   - removes the old restart LaunchAgent that killed the app every minute
+#   - stops the Mac sleeping, and restarts it after a power cut
+#   - opens the app (which then adds itself to Login Items)
+# Settings, role, pairing and media folder live in the user's Library and are
+# kept across updates.
+
+APP="/Applications/Parallel Playout.app"
+FW="/usr/libexec/ApplicationFirewall/socketfilterfw"
+LOG="/Library/Logs/ParallelPlayout-install.log"
+exec >>"$LOG" 2>&1
+echo "=== postinstall $(date '+%Y-%m-%d %H:%M:%S')"
+
+USER_NAME=$(/usr/bin/stat -f%Su /dev/console)
+USER_ID=$(/usr/bin/id -u "$USER_NAME" 2>/dev/null)
+USER_HOME=$(/usr/bin/dscl . -read "/Users/$USER_NAME" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')
+echo "console user: $USER_NAME ($USER_ID) $USER_HOME"
+
+/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+if /usr/bin/codesign --verify --deep --strict "$APP"; then
+  echo "signature: ok"
+else
+  echo "signature: INVALID — the Firewall will drop the Master on this Mac"
+fi
+
+# Firewall rules follow the code signature, so each new build is added again.
+if [ -x "$FW" ]; then
+  "$FW" --remove "$APP" >/dev/null 2>&1 || true
+  "$FW" --add "$APP"
+  "$FW" --unblockapp "$APP"
+  "$FW" --getappblocked "$APP"
+fi
+
+# The old watchdog LaunchAgent force-killed the app every 60 seconds.
+if [ -n "$USER_HOME" ]; then
+  for plist in "$USER_HOME"/Library/LaunchAgents/com.srisathyasai.parallelplayout*.plist; do
+    [ -e "$plist" ] || continue
+    label=$(/usr/bin/basename "$plist" .plist)
+    echo "removing LaunchAgent $label"
+    [ -n "$USER_ID" ] && /bin/launchctl bootout "gui/$USER_ID/$label" 2>/dev/null || true
+    /bin/mv "$plist" "$USER_HOME/ParallelPlayout-backup-$label-$(date +%Y%m%d%H%M%S).plist"
+  done
+fi
+
+# Never sleep; come back by itself after a power cut. Displays are kept awake
+# by the app while it runs.
+/usr/bin/pmset -a sleep 0 disksleep 0 autorestart 1 womp 1 || true
+/usr/bin/pmset -g | /usr/bin/egrep ' sleep | disksleep | autorestart ' || true
+
+if [ -n "$USER_ID" ] && [ "$USER_NAME" != "root" ]; then
+  echo "opening the app for $USER_NAME"
+  /bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/open "$APP" || true
+fi
+echo "=== done"
+exit 0

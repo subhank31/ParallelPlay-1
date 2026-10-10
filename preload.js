@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFile: () => ipcRenderer.invoke('dialog:openFile'),
   openSingleFile: () => ipcRenderer.invoke('dialog:openSingleFile'),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+  systemCheck: () => ipcRenderer.invoke('system:check'),
   player: {
     load: (filePath) => ipcRenderer.invoke('player:load', filePath),
     play: () => ipcRenderer.invoke('player:play'),

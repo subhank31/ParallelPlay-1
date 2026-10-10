@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, powerMonitor } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, powerMonitor, powerSaveBlocker } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { PlayerSession } = require('./player-session');
@@ -9,12 +9,52 @@ const { ConfigStore, DEFAULT_PORT } = require('./link/config-store');
 const { activateApp, appBundlePath } = require('./link/open-app');
 const { checkFirewall } = require('./link/firewall');
 const { installFileLog } = require('./link/file-log');
+const { describeSystem, readMounts } = require('./link/system-check');
 const { mediaDialogFilters, playlistDialogOptions } = require('./dialog-filters');
 
 const session = new PlayerSession();
 let config = null;
 let link = null;
 let quitting = false;
+let awakeBlocker = null;
+
+/** A playout Mac must never sleep or blank its displays while the app runs. */
+function keepAwake() {
+  awakeBlocker = powerSaveBlocker.start('prevent-display-sleep');
+  console.error(`[app] keeping this Mac and its displays awake (${powerSaveBlocker.isStarted(awakeBlocker) ? 'on' : 'failed'})`);
+}
+
+/** The installed app starts by itself after a restart or power cut. */
+function ensureLoginItem() {
+  if (!app.isPackaged) return null;
+  try {
+    if (!app.getLoginItemSettings().openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: true });
+      console.error('[app] added Parallel Playout to Login Items');
+    }
+    return app.getLoginItemSettings().openAtLogin === true;
+  } catch (error) {
+    console.error(`[app] could not add a login item: ${error.message}`);
+    return false;
+  }
+}
+
+async function systemCheck() {
+  const role = link ? link.role : (config && config.data.role) || 'master';
+  const [mountText, firewall] = await Promise.all([
+    readMounts(),
+    role === 'slave' ? checkFirewall(appBundlePath() || process.execPath) : Promise.resolve(null)
+  ]);
+  return describeSystem({
+    role,
+    mediaRoot: config ? config.data.mediaRoot || '' : '',
+    mountText,
+    firewall,
+    loginItem: app.isPackaged ? app.getLoginItemSettings().openAtLogin === true : null,
+    awake: awakeBlocker != null && powerSaveBlocker.isStarted(awakeBlocker),
+    paired: config ? config.getPaired() : null
+  });
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -136,7 +176,16 @@ app.whenReady().then(async () => {
     checkFirewall: () => checkFirewall(appBundlePath() || process.execPath)
   });
 
+  keepAwake();
+  ensureLoginItem();
   registerDialogs();
+  ipcMain.handle('system:check', async () => {
+    const result = await systemCheck();
+    for (const item of result.items) {
+      if (item.level !== 'ok') console.error(`[setup] ${item.title}: ${item.detail}`);
+    }
+    return result;
+  });
   registerPlayerIpc({
     ipcMain,
     BrowserWindow,
