@@ -947,23 +947,40 @@ class LinkController extends EventEmitter {
       return { ok: true, kept: true };
     }
     const mediaRoot = (this.config && this.config.data && this.config.data.mediaRoot) || '';
-    const resolvedItems = [];
-    for (const entry of payload.playlist || []) {
+    // Every Master row is kept, in order, so indexes match the Master. A row
+    // whose file is not on this Mac keeps the Master path and is marked missing.
+    const resolvedItems = (payload.playlist || []).map((entry) => {
       const resolved = resolveSessionFile(entry, mediaRoot, (filePath) => {
         try { return fs.existsSync(filePath); } catch (error) { return false; }
       });
-      if (!resolved.ok || !resolved.path) continue;
-      resolvedItems.push({
-        path: resolved.path,
-        name: entry.name || resolved.path.split(/[/\\]/).pop(),
-        type: entry.type || mediaTypeFromPath(resolved.path),
-        duration: entry.duration == null || !Number.isFinite(Number(entry.duration)) ? null : Number(entry.duration)
+      const found = resolved.ok && !!resolved.path;
+      const filePath = found ? resolved.path : String((entry && entry.path) || '');
+      return {
+        path: filePath,
+        name: (entry && entry.name) || filePath.split(/[/\\]/).pop(),
+        type: (entry && entry.type) || mediaTypeFromPath(filePath),
+        duration: !entry || entry.duration == null || !Number.isFinite(Number(entry.duration)) ? null : Number(entry.duration),
+        missing: !found
+      };
+    });
+    const selectedIndex = Number.isInteger(payload.selectedIndex) ? payload.selectedIndex : payload.currentIndex;
+    const showSession = (playerState) => {
+      this.emit('event', {
+        event: 'session',
+        session: {
+          playlistKnown: payload.playlistKnown !== false,
+          playlist: resolvedItems,
+          currentIndex: Number.isInteger(selectedIndex) ? selectedIndex : null,
+          playAll: payload.playAll === true,
+          player: playerState || null
+        }
       });
-    }
+    };
     const current = resolveSessionFile(payload.item, mediaRoot, (filePath) => {
       try { return fs.existsSync(filePath); } catch (error) { return false; }
     });
     if (!current.ok) {
+      showSession(null);
       if (guarded) {
         this.emit('event', { event: 'session-error', error: current.reason, stop: false });
         return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: current.reason } };
@@ -1011,20 +1028,7 @@ class LinkController extends EventEmitter {
       }
     }
     const after = await this.player.send('getState', {}, 5000).catch(() => null);
-    this.emit('event', {
-      event: 'session',
-      session: {
-        playlist: resolvedItems,
-        currentIndex: Number.isInteger(payload.currentIndex) ? payload.currentIndex : null,
-        item: current.idle ? null : { path: current.path, name: payload.item && payload.item.name },
-        position: payload.position,
-        duration: payload.duration,
-        state: payload.state,
-        rate: payload.rate,
-        playAll: payload.playAll === true,
-        player: after && after.state ? after.state : null
-      }
-    });
+    showSession(after && after.state ? after.state : null);
     return { ok: true, session: payload };
   }
 

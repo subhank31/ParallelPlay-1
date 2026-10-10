@@ -1,11 +1,19 @@
+/**
+ * A real Slave app with a Master connected: its controls are locked and it
+ * shows the Master's playlist exactly, in order, on the Master's item. When the
+ * Master goes away the controls unlock and the playlist stays.
+ */
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { ConfigStore } = require('../link/config-store');
+const { LinkController } = require('../link/link-controller');
+const { RecordingPlayer } = require('../link/recording-player');
 
 const results = [];
-const audioPath = '/tmp/pp-role-tone.wav';
-
 function record(name, ok, detail) {
   results.push({ name, ok: !!ok });
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`);
@@ -15,8 +23,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function writeWav(filePath) {
-  const data = Buffer.alloc(44100 * 2);
+function writeWav(filePath, seconds) {
+  const data = Buffer.alloc(22050 * 2 * seconds);
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + data.length, 4);
@@ -25,13 +33,24 @@ function writeWav(filePath) {
   header.writeUInt32LE(16, 16);
   header.writeUInt16LE(1, 20);
   header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(44100, 24);
-  header.writeUInt32LE(44100 * 2, 28);
+  header.writeUInt32LE(22050, 24);
+  header.writeUInt32LE(22050 * 2, 28);
   header.writeUInt16LE(2, 32);
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
   header.writeUInt32LE(data.length, 40);
   fs.writeFileSync(filePath, Buffer.concat([header, data]));
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
 }
 
 function get(url) {
@@ -44,175 +63,207 @@ function get(url) {
   });
 }
 
+async function devtools(port) {
+  let targets = '';
+  for (let i = 0; i < 60; i += 1) {
+    try {
+      targets = await get(`http://127.0.0.1:${port}/json`);
+      if (targets.includes('Parallel Playout')) break;
+    } catch (error) { /* booting */ }
+    await sleep(250);
+  }
+  const pages = JSON.parse(targets).filter((item) => item.type === 'page');
+  const page = pages.find((item) => item.title === 'Parallel Playout') || pages[0];
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve);
+    ws.addEventListener('error', () => reject(new Error('devtools socket failed')));
+  });
+  let nextId = 1;
+  const pending = new Map();
+  ws.addEventListener('message', (event) => {
+    const message = JSON.parse(event.data);
+    if (!message.id || !pending.has(message.id)) return;
+    pending.get(message.id)(message.result);
+    pending.delete(message.id);
+  });
+  async function evaluate(expression) {
+    const id = nextId++;
+    const result = await new Promise((resolve) => {
+      pending.set(id, resolve);
+      ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
+    });
+    if (result && result.exceptionDetails) {
+      return { error: result.exceptionDetails.exception && result.exceptionDetails.exception.description };
+    }
+    return result && result.result ? result.result.value : null;
+  }
+  return { ws, evaluate };
+}
+
+const readUi = `(() => {
+  const locks = Array.from(document.querySelectorAll('[data-slave-lock]'));
+  const rows = Array.from(document.querySelectorAll('.playlist-files li'));
+  return {
+    role: linkSnapshot && linkSnapshot.role,
+    locks: locks.length,
+    locked: locks.length > 0 && locks.every((node) => node.inert === true),
+    unlocked: locks.length > 0 && locks.every((node) => node.inert === false),
+    note: !document.getElementById('slaveLockNote').hidden,
+    rows: rows.map((row) => row.textContent),
+    missing: rows.map((row) => row.classList.contains('missing')),
+    current: rows.findIndex((row) => row.classList.contains('current')),
+    name: document.getElementById('masterFileName').textContent,
+    index: currentFileIndex
+  };
+})()`;
+
 async function main() {
-  writeWav(audioPath);
-  const port = 9229;
-  const userData = '/tmp/pp-slave-role';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-slave-role-'));
+  const masterMedia = path.join(dir, 'master');
+  const slaveMedia = path.join(dir, 'slave');
+  fs.mkdirSync(path.join(masterMedia, 'Set'), { recursive: true });
+  fs.mkdirSync(path.join(slaveMedia, 'Set'), { recursive: true });
+  // three.wav exists nowhere on this test Mac, as on a Slave that never got the copy.
+  for (const name of ['one.wav', 'two.wav']) writeWav(path.join(masterMedia, 'Set', name), 20);
+  for (const name of ['one.wav', 'two.wav']) writeWav(path.join(slaveMedia, 'Set', name), 20);
+  const playlist = ['one.wav', 'two.wav', 'three.wav'].map((name) => ({
+    path: path.join(masterMedia, 'Set', name), name, type: 'audio', duration: 20
+  }));
+
+  const slavePort = await freePort();
+  const debugPort = await freePort();
+  const masterId = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const slaveId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const userData = path.join(dir, 'slave-user-data');
   fs.mkdirSync(userData, { recursive: true });
+  fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({
+    version: 1,
+    deviceId: slaveId,
+    deviceName: 'Test Slave',
+    role: 'slave',
+    mediaRoot: slaveMedia,
+    listenPort: slavePort,
+    paired: { deviceId: masterId, deviceName: 'Test Master', role: 'master', host: '127.0.0.1', port: 47631 }
+  }));
+  const masterCfgPath = path.join(dir, 'master.json');
+  fs.writeFileSync(masterCfgPath, JSON.stringify({
+    version: 1,
+    deviceId: masterId,
+    deviceName: 'Test Master',
+    role: 'master',
+    mediaRoot: masterMedia,
+    listenPort: 47631,
+    paired: { deviceId: slaveId, deviceName: 'Test Slave', role: 'slave', host: '127.0.0.1', port: slavePort }
+  }));
+
   const electron = path.join(__dirname, '..', 'node_modules', '.bin', 'electron');
-  const child = spawn(electron, ['.', `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
+  const child = spawn(electron, ['.', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${userData}`], {
     cwd: path.join(__dirname, '..'),
-    env: Object.assign({}, process.env, { PLAYOUT_ROLE: 'slave', PLAYOUT_MUTE: '1' }),
+    env: Object.assign({}, process.env, { PLAYOUT_MUTE: '1' }),
     stdio: 'ignore'
   });
+  let master = null;
+  let ws = null;
   try {
-    let targets = '';
+    const tools = await devtools(debugPort);
+    ws = tools.ws;
+    const { evaluate } = tools;
+    let ui = null;
     for (let i = 0; i < 40; i += 1) {
-      try {
-        targets = await get(`http://127.0.0.1:${port}/json`);
-        if (targets.includes('Parallel Playout')) break;
-      } catch (error) { /* booting */ }
+      ui = await evaluate(readUi);
+      if (ui && ui.role === 'slave' && linkReady(ui)) break;
       await sleep(250);
     }
-    const pages = JSON.parse(targets).filter((item) => item.type === 'page');
-    const page = pages.find((item) => item.title === 'Parallel Playout') || pages[0];
-    const ws = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      ws.addEventListener('open', resolve);
-      ws.addEventListener('error', () => reject(new Error('devtools socket failed')));
-    });
-    let nextId = 1;
-    const pending = new Map();
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (!message.id || !pending.has(message.id)) return;
-      pending.get(message.id)(message.result);
-      pending.delete(message.id);
-    });
-    function send(method, params) {
-      const id = nextId++;
-      return new Promise((resolve) => {
-        pending.set(id, resolve);
-        ws.send(JSON.stringify({ id, method, params: params || {} }));
-      });
+    record('slave without a master keeps its controls unlocked', ui && ui.role === 'slave' && ui.unlocked && !ui.note,
+      JSON.stringify(ui && { role: ui.role, locks: ui.locks, unlocked: ui.unlocked, note: ui.note }));
+
+    // A Master connects, publishes a three-item playlist, and loads item 1.
+    const masterPlayer = new RecordingPlayer();
+    master = new LinkController(masterPlayer, { config: new ConfigStore(masterCfgPath), pairRetryDelayMs: 40 });
+    await master.setRole('master');
+    const started = await master.startPairedSession();
+    record('master connects to the paired slave app', started && started.ok === true, started && started.error);
+    await masterPlayer.send('load', { path: playlist[0].path });
+    master.publishSession({ playlist, currentIndex: 0, playAll: false });
+    const mirrored = await master.mirrorLoad(playlist[0].path);
+    for (let i = 0; i < 40; i += 1) {
+      ui = await evaluate(readUi);
+      if (ui && ui.locked && ui.rows.length === 3) break;
+      await sleep(150);
     }
-    async function evaluate(expression) {
-      const evaluated = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-      const remote = evaluated.result && evaluated.result.result ? evaluated.result.result : evaluated.result;
-      if (remote && remote.exceptionDetails) {
-        return { error: remote.exceptionDetails.text, description: remote.exceptionDetails.exception && remote.exceptionDetails.exception.description };
-      }
-      return remote ? remote.value : null;
-    }
-    const readControls = `(() => {
-      function hidden(id) {
-        const node = document.getElementById(id);
-        return !node || node.hidden || !!(node.closest && node.closest('[hidden]'));
-      }
-      return {
-        role: linkSnapshot && linkSnapshot.role,
-        openFile: hidden('filePickers'),
-        openFileDisabled: !!document.getElementById('chooseFileBtn').disabled,
-        media: hidden('chooseMediaBtn'),
-        transport: hidden('transport'),
-        previous: hidden('prevBtn'),
-        next: hidden('nextBtn'),
-        playAll: hidden('playAllLabel'),
-        seek: hidden('seekControls'),
-        speed: hidden('speedCard'),
-        playlist: document.getElementById('fileInfo') ? document.getElementById('fileInfo').textContent : '',
-        name: document.getElementById('masterFileName').textContent,
-        position: document.getElementById('infoPosition').textContent,
-        state: document.getElementById('previewState').textContent,
-        link: document.getElementById('linkStatusLine').textContent,
-        index: currentFileIndex
-      };
-    })()`;
-    let slaveUi = null;
-    for (let i = 0; i < 30; i += 1) {
-      slaveUi = await evaluate(readControls);
-      if (slaveUi && slaveUi.role === 'slave' && slaveUi.openFile) break;
-      await sleep(200);
-    }
-    const denied = await evaluate(`(async () => {
-      currentPlaylistFiles = [
-        { path: '/tmp/pp-local-a.wav', name: 'local-a.wav', type: 'audio', duration: 1 },
-        { path: '/tmp/pp-local-b.wav', name: 'local-b.wav', type: 'audio', duration: 1 }
-      ];
-      const selected = selectIndex(1);
-      const before = currentFileIndex;
-      await nextFile();
-      const afterNext = currentFileIndex;
-      applyAuthoritativeSession({
-        playlistKnown: true,
-        playlist: [
-          { path: '/tmp/pp-from-master-a.wav', name: 'from-master-a.wav', type: 'audio', duration: 1 },
-          { path: '/tmp/pp-from-master-b.wav', name: 'from-master-b.wav', type: 'audio', duration: 1 }
-        ],
-        currentIndex: 0,
-        playAll: true,
-        state: 'paused',
-        position: 1.25,
-        player: {
-          path: '/tmp/pp-from-master-a.wav',
-          status: 'paused',
-          position: 1.25,
-          duration: 1,
-          rate: 1
-        }
-      });
-      // File dialogs stay available on the Slave by design; they would block on a native panel here.
-      const loaded = await window.electronAPI.player.load(${JSON.stringify(audioPath)});
-      return { selected, before, afterNext, loaded, ui: ${readControls} };
-    })()`);
-    const slaveBlocked = denied && !denied.error &&
-      denied.selected === false && denied.before === 0 && denied.afterNext === 0 &&
-      denied.loaded && denied.loaded.ok === false && /Master/.test(denied.loaded.error || '');
-    const ui = denied && denied.ui;
-    record(
-      'slave hides file pickers and playback controls',
-      slaveUi && slaveUi.role === 'slave' && ui &&
-        ui.openFile && ui.openFileDisabled && ui.media && ui.transport &&
-        ui.previous && ui.next && ui.playAll && ui.seek && ui.speed &&
-        /Slave/.test(ui.link || ''),
-      JSON.stringify(ui || slaveUi)
-    );
-    record(
-      'slave cannot load files or change the playlist locally',
-      slaveBlocked && ui && ui.name === 'from-master-a.wav' && ui.playlist.indexOf('from-master-a.wav') >= 0 &&
-        ui.state === 'Paused' && ui.position !== '—',
-      JSON.stringify(denied && { selected: denied.selected, loaded: denied.loaded, name: ui && ui.name, state: ui && ui.state })
-    );
-    const master = await evaluate(`(async () => {
-      const switched = await window.electronAPI.link.setRole('master');
-      for (let i = 0; i < 20; i += 1) {
-        if (linkSnapshot && linkSnapshot.role === 'master' && !document.getElementById('filePickers').hidden) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      const loaded = await window.electronAPI.player.load(${JSON.stringify(audioPath)});
+    record('slave locks its controls while the master is connected', ui && ui.locked && ui.note,
+      JSON.stringify(ui && { locked: ui.locked, note: ui.note }));
+    record('slave shows the master playlist in order',
+      ui && ui.rows.length === 3 && /one\.wav/.test(ui.rows[0]) && /two\.wav/.test(ui.rows[1]) && /three\.wav/.test(ui.rows[2]),
+      JSON.stringify(ui && ui.rows));
+    record('a playlist item missing on the slave is shown and marked',
+      ui && ui.missing.join() === 'false,false,true' && /not on this Mac/.test(ui.rows[2] || ''),
+      JSON.stringify(ui && ui.missing));
+    record('slave highlights the master item', mirrored && mirrored.ok && ui && ui.current === 0 && ui.name === 'one.wav',
+      JSON.stringify(ui && { current: ui.current, name: ui.name, mirrored: mirrored && (mirrored.ok || mirrored.error) }));
+
+    const refused = await evaluate(`(async () => {
+      const load = await window.electronAPI.player.load(${JSON.stringify(path.join(slaveMedia, 'Set', 'two.wav'))});
+      const play = await window.electronAPI.player.play();
+      const stop = await window.electronAPI.player.stop();
+      await playFile();
       const state = await window.electronAPI.player.getState();
-      return { switched: switched && switched.snapshot, ui: ${readControls}, loaded, path: state && state.state && state.state.path };
+      return { load, play, stop, state: state && state.state };
     })()`);
-    record(
-      'master restores file controls and can load a file',
-      master && !master.error && master.ui && master.ui.role === 'master' &&
-        master.ui.openFile === false && master.ui.openFileDisabled === false &&
-        master.ui.transport === false && master.ui.playAll === false && master.ui.speed === false &&
-        master.loaded && master.loaded.ok !== false && master.path === audioPath,
-      JSON.stringify(master && { role: master.ui && master.ui.role, open: master.ui && master.ui.openFile, loaded: master.loaded && master.loaded.ok, path: master.path, error: master.error || (master.loaded && master.loaded.error) })
-    );
-    const again = await evaluate(`(async () => {
-      const switched = await window.electronAPI.link.setRole('slave');
-      for (let i = 0; i < 20; i += 1) {
-        if (linkSnapshot && linkSnapshot.role === 'slave' && document.getElementById('filePickers').hidden) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      const loaded = await window.electronAPI.player.load(${JSON.stringify(audioPath)});
-      return { ui: ${readControls}, loaded };
+    record('slave refuses local load, play and stop while the master is connected',
+      refused && refused.load && refused.load.locked && refused.play && refused.play.locked &&
+        refused.stop && refused.stop.locked && refused.state && refused.state.status !== 'playing' &&
+        /one\.wav$/.test(refused.state.path || ''),
+      JSON.stringify(refused && { load: refused.load, status: refused.state && refused.state.status, path: refused.state && refused.state.path }));
+
+    // The Master moves to item 2.
+    await masterPlayer.send('load', { path: playlist[1].path });
+    master.publishSession({ playlist, currentIndex: 1, playAll: false });
+    await master.mirrorLoad(playlist[1].path);
+    for (let i = 0; i < 40; i += 1) {
+      ui = await evaluate(readUi);
+      if (ui && ui.current === 1) break;
+      await sleep(150);
+    }
+    record('slave follows the master to the next item', ui && ui.current === 1 && ui.name === 'two.wav',
+      JSON.stringify(ui && { current: ui.current, name: ui.name }));
+
+    // The Master goes away.
+    await master.shutdown();
+    master = null;
+    for (let i = 0; i < 40; i += 1) {
+      ui = await evaluate(readUi);
+      if (ui && ui.unlocked) break;
+      await sleep(150);
+    }
+    record('slave unlocks when the master disconnects', ui && ui.unlocked && !ui.note,
+      JSON.stringify(ui && { unlocked: ui.unlocked, note: ui.note }));
+    record('slave keeps the master playlist after it disconnects', ui && ui.rows.length === 3 && ui.current === 1,
+      JSON.stringify(ui && { rows: ui.rows.length, current: ui.current }));
+    const local = await evaluate(`(async () => {
+      const play = await window.electronAPI.player.play();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const state = await window.electronAPI.player.getState();
+      await window.electronAPI.player.stop();
+      return { play, status: state && state.state && state.state.status };
     })()`);
-    record(
-      'switching back to slave blocks file loading again',
-      again && !again.error && again.ui && again.ui.role === 'slave' && again.ui.openFile && again.ui.transport &&
-        again.loaded && again.loaded.ok === false && /Master/.test(again.loaded.error || ''),
-      JSON.stringify(again && { role: again.ui && again.ui.role, loaded: again.loaded })
-    );
-    ws.close();
+    record('slave operator can play once unlocked', local && local.play && local.play.ok !== false && local.status === 'playing',
+      JSON.stringify(local));
   } finally {
+    if (master) await master.shutdown().catch(() => {});
+    if (ws) ws.close();
     child.kill('SIGTERM');
+    await sleep(500);
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   const failed = results.filter((item) => !item.ok);
   console.log(`\n${results.length - failed.length}/${results.length} slave role checks passed`);
-  if (failed.length) process.exit(1);
+  process.exit(failed.length ? 1 : 0);
+}
+
+function linkReady(ui) {
+  return ui.locks > 0;
 }
 
 main().catch((error) => {

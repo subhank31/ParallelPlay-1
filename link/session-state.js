@@ -62,6 +62,7 @@ function masterSessionPayload(playerState, published, mediaRoot) {
       duration: view.duration,
       state: view.status,
       rate: view.rate,
+      selectedIndex: published && Number.isInteger(published.currentIndex) ? published.currentIndex : null,
       playAll: !!(published && published.playAll),
       playlistKnown: !!(published && published.published)
     }

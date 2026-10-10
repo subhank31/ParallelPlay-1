@@ -137,7 +137,12 @@ app.whenReady().then(async () => {
   });
 
   registerDialogs();
-  registerPlayerIpc({ ipcMain, BrowserWindow, session });
+  registerPlayerIpc({
+    ipcMain,
+    BrowserWindow,
+    session,
+    isLocked: () => link.role === 'slave' && link.masterConnected === true && !!link.authorizedOnSlave()
+  });
   registerLinkIpc({
     ipcMain,
     BrowserWindow,

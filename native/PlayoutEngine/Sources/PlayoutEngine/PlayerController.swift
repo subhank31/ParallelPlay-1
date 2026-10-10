@@ -454,6 +454,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
         guard player.currentItem != nil else { return "No file is loaded." }
         player.playImmediately(atRate: Float(desiredRate))
         status = .playing
+        engineLog(String(format: "play at %.2f", player.currentTime().seconds))
         refreshCursor()
         return nil
     }
@@ -468,6 +469,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
         if status != .ended {
             status = .paused
         }
+        engineLog(String(format: "pause at %.2f", player.currentTime().seconds))
         refreshCursor()
         return nil
     }
@@ -745,6 +747,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
                 return
             }
             status = .playing
+            engineLog(String(format: "scheduled play at %.2f, host %.3f", itemTime.seconds, hostTime))
             completion(nil)
             return
         }
@@ -757,6 +760,7 @@ final class PlayerController: NSObject, NSWindowDelegate {
                 }
                 self.player.playImmediately(atRate: playRate)
                 self.status = .playing
+                engineLog(String(format: "scheduled play at %.2f, immediate", itemTime.seconds))
                 completion(nil)
             }
         }

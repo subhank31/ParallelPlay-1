@@ -283,6 +283,9 @@
       background: #b8882f;
     }
     .playlist-files li.current.playing { background: #e4e9ff; }
+    .playlist-files li.missing { color: #a33; }
+    [data-slave-lock][inert] { opacity: 0.5; }
+    .slave-lock-note { margin: 0 0 10px; color: var(--muted); }
     .playlist-files li.current.playing::before { background: var(--accent); }
     .play-all { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; color: var(--text); }
     .play-all input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -399,7 +402,8 @@
             <div class="control-grid">
               <section class="card" aria-label="File Management">
                 <h2 class="section-title">File Management</h2>
-                <div class="inline-actions">
+                <p class="slave-lock-note" id="slaveLockNote" hidden>Controlled by the Master. These controls unlock if the Master disconnects.</p>
+                <div class="inline-actions" data-slave-lock>
                   <button type="button" class="btn" id="chooseSingleFileBtn">Open file</button>
                   <button type="button" class="btn" id="chooseFileBtn">Open playlist</button>
                 </div>
@@ -412,7 +416,7 @@
                 </div>
                 <p class="file-empty">No file selected.</p>
               </section>
-              <section class="card" aria-label="Playback">
+              <section class="card" aria-label="Playback" data-slave-lock>
                 <h2 class="section-title">Playback</h2>
                 <div class="transport" aria-label="Playback">
                   <button type="button" class="btn primary" onclick="playFile()">Play</button>
@@ -426,7 +430,7 @@
                   <span id="timelineEnd">00:00.00</span>
                 </div>
               </section>
-              <section class="card span-row" aria-label="Navigation">
+              <section class="card span-row" aria-label="Navigation" data-slave-lock>
                 <h2 class="section-title">Navigation</h2>
                 <div class="inline-actions">
                   <button type="button" class="btn" id="prevBtn" onclick="previousFile()" disabled>Previous</button>
@@ -441,7 +445,7 @@
                   <button type="button" class="btn" onclick="skipBy(10)">Forward 10s</button>
                 </div>
               </section>
-              <section class="card span-row" aria-label="Speed">
+              <section class="card span-row" aria-label="Speed" data-slave-lock>
                 <h2 class="section-title">Speed</h2>
                 <div class="rate-row">
                   <span class="field-label">Rate</span>
@@ -785,6 +789,7 @@
     }
 
     async function seekTo() {
+      if (refuseWhileLocked()) return;
       const seekValue = document.getElementById('seekValue').value;
       if (seekValue === '' || isNaN(seekValue) || seekValue < 0) {
         showResponse('Enter a time in seconds, zero or greater.', 'error');
@@ -805,6 +810,7 @@
     }
 
     async function setSpeed(speed) {
+      if (refuseWhileLocked()) return;
       const player = localPlayer();
       if (!player) return;
       showResponse('Setting speed to ' + speed + '×.', 'info');
@@ -819,12 +825,14 @@
     }
 
     async function resetSpeed() {
+      if (refuseWhileLocked()) return;
       const speed10Radio = document.getElementById('speed10');
       if (speed10Radio) speed10Radio.checked = true;
       await setSpeed(1);
     }
 
     async function skipBy(delta) {
+      if (refuseWhileLocked()) return;
       const player = localPlayer();
       if (!player) return;
       try {
@@ -1044,8 +1052,10 @@
         const kind = typeLabel(file && file.type);
         const durationText = file && file.duration ? formatClock(file.duration) : '—';
         const title = escapeHtml(entryPath(file));
-        return '<li data-index="' + index + '" title="' + title + '">' +
-          (index + 1) + '. ' + fname + ' · ' + kind + ' · <span class="num">' + durationText + '</span></li>';
+        const missing = file && file.missing === true;
+        return '<li data-index="' + index + '" title="' + title + '"' + (missing ? ' class="missing"' : '') + '>' +
+          (index + 1) + '. ' + fname + ' · ' + kind + ' · <span class="num">' + durationText + '</span>' +
+          (missing ? ' · not on this Mac' : '') + '</li>';
       }).join('');
       playlistDisplay.innerHTML =
         '<div class="playlist-note">Playlist on this Mac (' + currentPlaylistFiles.length + ' files).' +
@@ -1199,6 +1209,23 @@
       return Number.isFinite(duration) ? duration : null;
     }
 
+    // While its Master is connected the Slave only follows; its controls unlock
+    // the moment the Master goes away so the operator can take over.
+    let slaveLocked = false;
+
+    function applySlaveLock(locked) {
+      slaveLocked = !!locked;
+      document.querySelectorAll('[data-slave-lock]').forEach((node) => { node.inert = slaveLocked; });
+      const note = document.getElementById('slaveLockNote');
+      if (note) note.hidden = !slaveLocked;
+    }
+
+    function refuseWhileLocked() {
+      if (!slaveLocked) return false;
+      showResponse('This Slave is controlled by the Master. Controls unlock if the Master disconnects.', 'info');
+      return true;
+    }
+
     function publishSession() {
       if (!window.electronAPI || !window.electronAPI.link || !window.electronAPI.link.publishSession) return;
       const box = document.getElementById('playAllBox');
@@ -1264,11 +1291,14 @@
           path: entry.path,
           name: entry.name || entryPath(entry).split('/').pop(),
           type: entry.type || mediaTypeOf(entry.path),
-          duration: sessionDuration(entry && entry.duration)
+          duration: sessionDuration(entry && entry.duration),
+          missing: entry.missing === true
         }));
       }
       if (Number.isInteger(session.currentIndex) && session.currentIndex >= 0 && session.currentIndex < currentPlaylistFiles.length) {
         currentFileIndex = session.currentIndex;
+      } else if (currentFileIndex >= currentPlaylistFiles.length) {
+        currentFileIndex = 0;
       }
       const box = document.getElementById('playAllBox');
       if (box) box.checked = session.playAll === true;
@@ -1341,6 +1371,7 @@
     }
 
     document.getElementById('chooseSingleFileBtn').addEventListener('click', async function () {
+      if (refuseWhileLocked()) return;
       if (window.electronAPI && window.electronAPI.openSingleFile) {
         try {
           const filePaths = await window.electronAPI.openSingleFile();
@@ -1362,6 +1393,7 @@
     });
 
     document.getElementById('chooseFileBtn').addEventListener('click', async function () {
+      if (refuseWhileLocked()) return;
       if (window.electronAPI && window.electronAPI.openFile) {
         try {
           const filePaths = await window.electronAPI.openFile();
@@ -1523,6 +1555,7 @@
       const peer = snapshot.peer || null;
       const connected = snapshot.connection === 'connected' || (snapshot.role === 'slave' && snapshot.masterConnected && snapshot.authorized);
       const reconnecting = !!snapshot.reconnecting;
+      applySlaveLock(snapshot.role === 'slave' && connected);
 
       let connectionLabel = 'Disconnected';
       let connectionKind = '';
@@ -1934,6 +1967,7 @@
     }
 
     async function nextFile() {
+      if (refuseWhileLocked()) return;
       const nav = window.PlaylistUI.navigationState(currentFileIndex, currentPlaylistFiles.length);
       if (nav.nextDisabled) {
         if (currentPlaylistFiles.length > 1) showResponse('This is the last file in the playlist.', 'info');
@@ -1944,6 +1978,7 @@
     }
 
     async function previousFile() {
+      if (refuseWhileLocked()) return;
       const nav = window.PlaylistUI.navigationState(currentFileIndex, currentPlaylistFiles.length);
       if (nav.previousDisabled) {
         if (currentPlaylistFiles.length > 1) showResponse('This is the first file in the playlist.', 'info');
@@ -1954,6 +1989,7 @@
     }
 
     async function playFile() {
+      if (refuseWhileLocked()) return;
       if (currentPlaylistFiles.length === 0) {
         showResponse('Open a file first.', 'error');
         return;
@@ -2005,6 +2041,7 @@
     }
 
     async function pauseFile() {
+      if (refuseWhileLocked()) return;
       recoveryError = '';
       transportGeneration += 1;
       const player = localPlayer();
@@ -2046,6 +2083,7 @@
     }
 
     async function stopFile() {
+      if (refuseWhileLocked()) return;
       recoveryError = '';
       const player = localPlayer();
       if (!player) return;

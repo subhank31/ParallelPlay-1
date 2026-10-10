@@ -139,7 +139,9 @@ function secondsError(seconds) {
   return null;
 }
 
-function registerPlayerIpc({ ipcMain, BrowserWindow, session }) {
+const LOCKED_MESSAGE = 'This Slave is controlled by the Master. Controls unlock if the Master disconnects.';
+
+function registerPlayerIpc({ ipcMain, BrowserWindow, session, isLocked = () => false }) {
   function broadcast(payload) {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('player:event', payload);
@@ -156,23 +158,31 @@ function registerPlayerIpc({ ipcMain, BrowserWindow, session }) {
     }
   }
 
+  // Transport from this window is refused while a Master drives this Slave.
+  function locked() {
+    return isLocked() ? { ok: false, locked: true, error: LOCKED_MESSAGE } : null;
+  }
+
   ipcMain.handle('player:load', (_event, filePath) => {
+    if (isLocked()) return locked();
     const error = mediaPathError(filePath);
     if (error) return { ok: false, error };
     return attempt(() => session.send('load', { path: filePath }, 30000));
   });
 
-  ipcMain.handle('player:play', () => attempt(() => session.send('play')));
-  ipcMain.handle('player:pause', () => attempt(() => session.send('pause')));
-  ipcMain.handle('player:stop', () => attempt(() => session.send('stop')));
+  ipcMain.handle('player:play', () => locked() || attempt(() => session.send('play')));
+  ipcMain.handle('player:pause', () => locked() || attempt(() => session.send('pause')));
+  ipcMain.handle('player:stop', () => locked() || attempt(() => session.send('stop')));
 
   ipcMain.handle('player:seek', (_event, seconds) => {
+    if (isLocked()) return locked();
     const error = secondsError(seconds);
     if (error) return { ok: false, error };
     return attempt(() => session.send('seek', { seconds: Number(seconds) }));
   });
 
   ipcMain.handle('player:setRate', (_event, rate) => {
+    if (isLocked()) return locked();
     const error = rateError(rate);
     if (error) return { ok: false, error };
     return attempt(() => session.send('setRate', { rate: Number(rate) }));
