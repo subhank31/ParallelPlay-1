@@ -370,6 +370,10 @@
       <div id="slaveFirewallBanner" class="wait-banner" role="alert" hidden>
         <span id="slaveFirewallText"></span>
       </div>
+      <div id="masterObserveBanner" class="wait-banner" role="status" hidden>
+        <span id="masterObserveText"></span>
+        <button type="button" class="btn primary" id="syncWithSlaveBtn" onclick="syncWithSlave()">Sync</button>
+      </div>
       <div id="slaveWaitBanner" class="wait-banner" hidden>
         <span id="slaveWaitText"></span>
         <button type="button" class="btn" onclick="confirmUnpair()">Remove Connection</button>
@@ -402,7 +406,7 @@
             <div class="control-grid">
               <section class="card" aria-label="File Management">
                 <h2 class="section-title">File Management</h2>
-                <p class="slave-lock-note" id="slaveLockNote" hidden>Controlled by the Master. These controls unlock if the Master disconnects.</p>
+                <p class="slave-lock-note" id="slaveLockNote" hidden></p>
                 <div class="inline-actions" data-slave-lock>
                   <button type="button" class="btn" id="chooseSingleFileBtn">Open file</button>
                   <button type="button" class="btn" id="chooseFileBtn">Open playlist</button>
@@ -1210,20 +1214,68 @@
     }
 
     // While its Master is connected the Slave only follows; its controls unlock
-    // the moment the Master goes away so the operator can take over.
-    let slaveLocked = false;
+    // the moment the Master goes away so the operator can take over. A Master
+    // that rejoins while the Slave is on air only watches until Sync.
+    const LOCK_MESSAGES = {
+      slave: 'Controlled by the Master. These controls unlock if the Master disconnects.',
+      observing: 'The Slave is on air. Press Sync to join it and take control.'
+    };
+    let controlLock = null;
 
-    function applySlaveLock(locked) {
-      slaveLocked = !!locked;
-      document.querySelectorAll('[data-slave-lock]').forEach((node) => { node.inert = slaveLocked; });
+    function applyControlLock(mode) {
+      controlLock = LOCK_MESSAGES[mode] ? mode : null;
+      document.querySelectorAll('[data-slave-lock]').forEach((node) => { node.inert = !!controlLock; });
       const note = document.getElementById('slaveLockNote');
-      if (note) note.hidden = !slaveLocked;
+      if (note) {
+        note.textContent = controlLock ? LOCK_MESSAGES[controlLock] : '';
+        note.hidden = !controlLock;
+      }
     }
 
     function refuseWhileLocked() {
-      if (!slaveLocked) return false;
-      showResponse('This Slave is controlled by the Master. Controls unlock if the Master disconnects.', 'info');
+      if (!controlLock) return false;
+      showResponse(LOCK_MESSAGES[controlLock], 'info');
       return true;
+    }
+
+    function paintObserving(snapshot, connected) {
+      const banner = document.getElementById('masterObserveBanner');
+      if (!banner) return;
+      const view = snapshot.role === 'master' && connected ? snapshot.observing : null;
+      banner.hidden = !view && !snapshot.syncing;
+      const button = document.getElementById('syncWithSlaveBtn');
+      if (button) {
+        button.disabled = !!snapshot.syncing;
+        button.textContent = snapshot.syncing ? 'Syncing…' : 'Sync';
+      }
+      if (snapshot.syncing) {
+        setText('masterObserveText', 'Syncing with the Slave…');
+        return;
+      }
+      if (!view) return;
+      const state = view.state === 'paused' ? 'Paused' : (view.state === 'loading' ? 'Loading' : 'Playing');
+      const where = view.index != null && view.count ? ' (item ' + (view.index + 1) + ' of ' + view.count + ')' : '';
+      setText('masterObserveText', 'The Slave is on air: ' + (view.name || 'a file') + where + ', ' + state + ' at ' +
+        formatClock(view.position) + (view.duration ? ' / ' + formatClock(view.duration) : '') +
+        '. This Master is only watching and sends nothing. Press Sync to join the Slave and take control.');
+    }
+
+    async function syncWithSlave() {
+      if (!window.electronAPI || !window.electronAPI.link || !window.electronAPI.link.syncWithSlave) return;
+      showResponse('Syncing with the Slave…', 'info');
+      try {
+        const result = await window.electronAPI.link.syncWithSlave();
+        if (!result || result.ok === false) {
+          showResponse((result && result.error && result.error.message) || 'Sync failed. The Slave keeps playing.', 'error');
+          return;
+        }
+        if (result.warning) showResponse(result.warning + ' This Master is now in control.', 'warning');
+        else if (result.driftMs != null) {
+          showResponse('In sync with the Slave (within ' + Math.abs(result.driftMs).toFixed(0) + ' ms). This Master is now in control.', 'success');
+        } else showResponse('This Master is now in control of the Slave.', 'success');
+      } catch (error) {
+        showResponse('Sync failed. The Slave keeps playing.', 'error', error.message);
+      }
     }
 
     function publishSession() {
@@ -1555,7 +1607,9 @@
       const peer = snapshot.peer || null;
       const connected = snapshot.connection === 'connected' || (snapshot.role === 'slave' && snapshot.masterConnected && snapshot.authorized);
       const reconnecting = !!snapshot.reconnecting;
-      applySlaveLock(snapshot.role === 'slave' && connected);
+      const observing = snapshot.role === 'master' && connected && !!(snapshot.observing || snapshot.syncing);
+      applyControlLock(snapshot.role === 'slave' && connected ? 'slave' : (observing ? 'observing' : null));
+      paintObserving(snapshot, connected);
 
       let connectionLabel = 'Disconnected';
       let connectionKind = '';

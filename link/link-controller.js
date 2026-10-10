@@ -8,9 +8,19 @@ const { monotonicNow, sharedNow, synchronize, emptyEstimate } = require('./clock
 const { defaultLeadMs, planScheduledPlay } = require('./scheduled-command');
 const { toRelativeMediaPath } = require('./media-path');
 const { DEFAULT_PORT } = require('./config-store');
-const { masterSessionPayload, resolveSessionFile } = require('./session-state');
+const { masterSessionPayload, resolveSessionFile, resolvePlaylistItems } = require('./session-state');
 const { reconcileCommands, mediaTypeFromPath } = require('../playlist-ui');
 const { ConnectionTrace } = require('./connection-trace');
+
+function fileExists(filePath) {
+  try {
+    return fs.existsSync(filePath);
+  } catch (error) {
+    return false;
+  }
+}
+
+const ON_AIR = new Set(['playing', 'paused', 'loading']);
 
 class LinkController extends EventEmitter {
   constructor(player, options = {}) {
@@ -58,11 +68,23 @@ class LinkController extends EventEmitter {
     this._closed = false;
     this.linkReady = false;
     this.sessionDesired = false;
+    // A Master that rejoins while the Slave is on air only watches until Sync.
+    this.observing = null;
+    this.syncing = false;
+    this.lastSync = null;
+    this.observePollMs = options.observePollMs == null ? 1000 : options.observePollMs;
+    this._observeTimer = null;
+    this.heartbeatMs = options.heartbeatMs == null ? 2000 : options.heartbeatMs;
+    this.silenceMs = options.silenceMs == null ? 7000 : options.silenceMs;
+    this._heartbeatTimer = null;
+    this._heartbeatMisses = 0;
     this._wireClient();
   }
 
   _wireClient() {
     this.client.on('disconnected', () => {
+      this._stopHeartbeat();
+      this._setObserving(null, { quiet: true });
       this._clearSync();
       this.pairingState = this.config && this.config.getPaired() ? 'paired' : this.pairingState;
       this.linkReady = false;
@@ -132,6 +154,9 @@ class LinkController extends EventEmitter {
       leadMs: this.leadMs,
       clock: this.clockSnapshot(),
       lastExecution: this.lastExecution,
+      observing: this.observing,
+      syncing: this.syncing,
+      lastSync: this.lastSync,
       connectionTrace: this.trace.snapshot()
     };
   }
@@ -360,7 +385,9 @@ class LinkController extends EventEmitter {
       enforcePairing: true,
       clock: this.clock,
       openApp: this.openApp,
-      trace: this.trace
+      trace: this.trace,
+      describePlayout: () => this._describePlayout(),
+      silenceMs: this.silenceMs
     });
     this._bindServer(server);
     this.server = server;
@@ -608,6 +635,8 @@ class LinkController extends EventEmitter {
       this.pairingState = 'paired';
       this.linkReady = true;
       this.reconnectAttempt = 0;
+      this._startHeartbeat();
+      await this._decideObserving();
       this.emit('event', Object.assign({ event: 'paired' }, this.snapshot()));
       this._pushSessionToSlave().catch(() => {});
       return { ok: true, snapshot: this.snapshot(), automatic: true };
@@ -649,6 +678,8 @@ class LinkController extends EventEmitter {
     this.lastPairError = null;
     this.slaveUnavailable = false;
     this.trace.clearFailure();
+    this._startHeartbeat();
+    await this._decideObserving();
     this.emit('event', Object.assign({ event: 'paired' }, this.snapshot()));
     this._pushSessionToSlave().catch(() => {});
     return { ok: true, snapshot: this.snapshot(), automatic: false };
@@ -805,6 +836,8 @@ class LinkController extends EventEmitter {
     // play-all goes to the Slave; transport travels as explicit commands.
     const key = JSON.stringify([playlist, index, this.publishedSession.playAll]);
     if (key === this._publishedKey) return { ok: true, unchanged: true };
+    // While watching an on-air Slave nothing is sent; Sync publishes afterwards.
+    if (this.observing) return { ok: true, observing: true };
     this._publishedKey = key;
     if (this.role === 'master') {
       this._pushSessionToSlave().catch(() => {});
@@ -826,10 +859,297 @@ class LinkController extends EventEmitter {
 
   async _pushSessionToSlave() {
     if (this.role !== 'master' || this.client.connectionState !== 'connected') return { ok: false };
+    if (this.observing) return { ok: false, observing: true };
     const built = await this._buildSessionPayload();
     if (!built.ok) return { ok: false, error: built.error };
     const response = await this._remote('sessionSync', built.payload, 30000);
     return response && response.ok ? { ok: true } : { ok: false, error: response && response.error };
+  }
+
+  // ---- Slave keeps playing; a rejoining Master watches, then Syncs ----
+
+  /** Slave side: what is on air here, stamped with this Mac's monotonic clock. */
+  async _describePlayout() {
+    let result = null;
+    const before = this.clock.monotonicNow();
+    try {
+      result = await this.player.send('getState', {}, 5000);
+    } catch (error) {
+      return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: error.message } };
+    }
+    const after = this.clock.monotonicNow();
+    const state = result && result.state ? result.state : null;
+    const mediaRoot = (this.config && this.config.data && this.config.data.mediaRoot) || '';
+    const built = masterSessionPayload(state, this.publishedSession, mediaRoot);
+    if (!built.ok) return built;
+    return {
+      ok: true,
+      payload: Object.assign(built.payload, { sampledAt: (before + after) / 2, sampleSpreadMs: after - before })
+    };
+  }
+
+  async _readSlavePlayout() {
+    const response = await this._remote('getPlayout', {}, 5000);
+    if (!response || response.ok === false || !response.payload) return null;
+    return response.payload;
+  }
+
+  _observedView(playout) {
+    const index = Number.isInteger(playout.selectedIndex) ? playout.selectedIndex : playout.currentIndex;
+    return {
+      name: (playout.item && playout.item.name) || '',
+      state: playout.state,
+      position: Number.isFinite(playout.position) ? playout.position : 0,
+      duration: Number.isFinite(playout.duration) ? playout.duration : null,
+      rate: Number.isFinite(playout.rate) ? playout.rate : 1,
+      index: Number.isInteger(index) ? index : null,
+      count: Array.isArray(playout.playlist) ? playout.playlist.length : 0
+    };
+  }
+
+  _setObserving(view, options = {}) {
+    const was = !!this.observing;
+    this.observing = view || null;
+    if (this.observing && !this._observeTimer && this.observePollMs > 0) {
+      this._observeTimer = setInterval(() => this._pollObserved().catch(() => {}), this.observePollMs);
+      if (typeof this._observeTimer.unref === 'function') this._observeTimer.unref();
+    }
+    if (!this.observing && this._observeTimer) {
+      clearInterval(this._observeTimer);
+      this._observeTimer = null;
+    }
+    if (was !== !!this.observing && !options.quiet) {
+      console.error(this.observing
+        ? `[link] Slave is on air (${this.observing.name} ${this.observing.state} at ${this.observing.position.toFixed(2)} s); this Master watches until Sync`
+        : '[link] this Master is in control of the Slave');
+    }
+    if (!options.silent) this.emit('event', Object.assign({ event: 'observing' }, this.snapshot()));
+  }
+
+  /** On (re)connect: an idle Master never takes over a Slave that is on air. */
+  async _decideObserving() {
+    if (this.role !== 'master') return;
+    const local = await this._localPlayback();
+    if (local && (local.status === 'playing' || local.status === 'paused')) {
+      this._setObserving(null, { silent: true });
+      return;
+    }
+    const playout = await this._readSlavePlayout();
+    const onAir = !!(playout && playout.item && ON_AIR.has(playout.state));
+    this._setObserving(onAir ? this._observedView(playout) : null, { silent: true });
+  }
+
+  async _pollObserved() {
+    if (!this.observing || this.syncing || this.client.connectionState !== 'connected') return;
+    const playout = await this._readSlavePlayout();
+    if (!playout || !this.observing || this.syncing) return;
+    if (!playout.item || !ON_AIR.has(playout.state)) {
+      this._setObserving(null);
+      this._pushSessionToSlave().catch(() => {});
+      return;
+    }
+    this._setObserving(this._observedView(playout));
+  }
+
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    if (!(this.heartbeatMs > 0)) return;
+    this._heartbeatMisses = 0;
+    let inFlight = false;
+    this._heartbeatTimer = setInterval(() => {
+      if (inFlight || this.client.connectionState !== 'connected') return;
+      inFlight = true;
+      this.client.request('heartbeat', {}, Math.max(1000, this.heartbeatMs * 1.5))
+        .then((response) => {
+          if (response && response.ok !== false) this._heartbeatMisses = 0;
+        })
+        .catch(() => {
+          this._heartbeatMisses += 1;
+          if (this._heartbeatMisses < 3) return;
+          console.error(`[link] Slave missed ${this._heartbeatMisses} heartbeats; reconnecting`);
+          this._heartbeatMisses = 0;
+          const socket = this.client.socket;
+          if (socket && !socket.destroyed) socket.destroy();
+        })
+        .finally(() => { inFlight = false; });
+    }, this.heartbeatMs);
+    if (typeof this._heartbeatTimer.unref === 'function') this._heartbeatTimer.unref();
+  }
+
+  _stopHeartbeat() {
+    if (this._heartbeatTimer) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
+  }
+
+  /** Master position minus Slave position at one instant, in ms. */
+  async _measureDrift(offsetMs) {
+    const playout = await this._readSlavePlayout();
+    if (!playout || playout.state !== 'playing' || !Number.isFinite(playout.sampledAt)) return null;
+    const before = this.clock.monotonicNow();
+    const local = await this.player.send('getState', {}, 5000).catch(() => null);
+    const after = this.clock.monotonicNow();
+    const state = local && local.state;
+    if (!state || state.status !== 'playing' || !Number.isFinite(state.position)) return null;
+    const rate = Number.isFinite(playout.rate) && playout.rate > 0 ? playout.rate : 1;
+    const slaveAtMaster = playout.sampledAt - offsetMs;
+    const slavePosition = playout.position + (rate * (((before + after) / 2) - slaveAtMaster)) / 1000;
+    return (state.position - slavePosition) * 1000;
+  }
+
+  /**
+   * Start this Master's player so it lands exactly where the Slave will be.
+   * Only the Master moves; the Slave is never touched.
+   */
+  async _startLocalAligned(playout, offsetMs) {
+    const rate = Number.isFinite(playout.rate) && playout.rate > 0 ? playout.rate : 1;
+    const before = this.clock.monotonicNow();
+    const probe = await this.player.send('getState', {}, 5000).catch(() => null);
+    const after = this.clock.monotonicNow();
+    const hostNow = probe && probe.state && Number.isFinite(probe.state.hostTime) ? probe.state.hostTime : null;
+    if (hostNow == null) return { ok: false, error: 'This Master player did not report its clock.' };
+    const target = this.clock.monotonicNow() + this.syncLeadMs();
+    const slaveAtMaster = playout.sampledAt - offsetMs;
+    const seconds = playout.position + (rate * (target - slaveAtMaster)) / 1000;
+    if (playout.duration && seconds >= playout.duration - 0.5) {
+      return { ok: false, error: 'The Slave item is about to end; Sync again on the next item.' };
+    }
+    const hostTime = hostNow + (target - (before + after) / 2) / 1000;
+    const started = await this.player.send('scheduledPlay', { seconds, rate, hostTime }, 10000).catch((error) => ({
+      ok: false, error: error.message
+    }));
+    if (!started || started.ok === false) {
+      return { ok: false, error: (started && started.error) || 'This Master player could not start.' };
+    }
+    return { ok: true, seconds };
+  }
+
+  syncLeadMs() {
+    return 400;
+  }
+
+  /**
+   * Sync: this Master joins the Slave that kept playing, then controls it.
+   * Master playback is aligned to the Slave by the measured clock offset; the
+   * Slave's own playback is left exactly as it is.
+   */
+  async syncWithSlave() {
+    if (this.role !== 'master') {
+      return { ok: false, error: { code: 'WRONG_ROLE', message: 'Only the Master can Sync.' } };
+    }
+    if (this.client.connectionState !== 'connected') {
+      return { ok: false, error: { code: 'NOT_CONNECTED', message: 'The Slave is not connected.' }, snapshot: this.snapshot() };
+    }
+    if (this.syncing) return { ok: false, error: { code: 'BUSY', message: 'Sync is already running.' } };
+    this.syncing = true;
+    this.emit('event', Object.assign({ event: 'observing' }, this.snapshot()));
+    try {
+      return await this._syncWithSlave();
+    } finally {
+      this.syncing = false;
+      this.emit('event', Object.assign({ event: 'observing' }, this.snapshot()));
+    }
+  }
+
+  async _syncWithSlave() {
+    const clock = await this.syncClock();
+    if (!clock.ok || !Number.isFinite(this.syncState.offsetMs)) {
+      return { ok: false, error: clock.error || { code: 'NOT_SYNCHRONIZED', message: 'Could not measure the clock.' } };
+    }
+    const offsetMs = this.syncState.offsetMs;
+    const playout = await this._readSlavePlayout();
+    if (!playout) {
+      return { ok: false, error: { code: 'STATE_UNAVAILABLE', message: 'The Slave did not report what it is playing.' } };
+    }
+    const mediaRoot = (this.config && this.config.data && this.config.data.mediaRoot) || '';
+    const items = resolvePlaylistItems(playout.playlist, mediaRoot, fileExists)
+      .map((item) => Object.assign(item, { type: item.type || mediaTypeFromPath(item.path) }));
+    const current = resolveSessionFile(playout.item, mediaRoot, fileExists);
+    const onAir = !!(playout.item && (playout.state === 'playing' || playout.state === 'paused'));
+    const name = (playout.item && playout.item.name) || 'the Slave item';
+    let warning = null;
+    let driftMs = null;
+
+    if (onAir && current.ok && !current.idle) {
+      const aligned = await this._alignLocal(current.path, playout, offsetMs);
+      if (aligned.ok) driftMs = aligned.driftMs;
+      else warning = `${aligned.error} The Slave keeps playing ${name}.`;
+    } else if (onAir) {
+      warning = `${name} is not on this Mac, so this Master cannot play it. The Slave keeps playing.`;
+    }
+
+    // Take control. The Slave already has this item; never reload it.
+    this._setObserving(null, { silent: true });
+    if (current.ok && !current.idle) {
+      const relative = toRelativeMediaPath(mediaRoot, current.path);
+      this.mirroredMediaPath = relative.ok ? relative.mediaPath : (playout.item.mediaPath || null);
+      this.mirroredMedia = current.path;
+      this.slaveMediaStatus = 'ready';
+    } else {
+      this.mirroredMediaPath = (playout.item && playout.item.mediaPath) || null;
+      this.mirroredMedia = null;
+      this.slaveMediaStatus = playout.item ? 'ready' : null;
+    }
+    this._publishedKey = null;
+    const local = await this.player.send('getState', {}, 5000).catch(() => null);
+    const index = Number.isInteger(playout.selectedIndex) ? playout.selectedIndex : playout.currentIndex;
+    this.lastSync = {
+      at: new Date().toISOString(),
+      name,
+      state: playout.state,
+      driftMs: driftMs == null ? null : Math.round(driftMs),
+      warning
+    };
+    console.error(
+      `[link] Sync: ${name} ${playout.state}; ` +
+      (driftMs == null ? 'Master not playing' : `Master within ${Math.abs(driftMs).toFixed(1)} ms of the Slave`) +
+      (warning ? `; ${warning}` : '') + '; this Master is in control'
+    );
+    this.emit('event', {
+      event: 'session',
+      session: {
+        playlistKnown: true,
+        playlist: items,
+        currentIndex: Number.isInteger(index) ? index : null,
+        playAll: playout.playAll === true,
+        player: local && local.state ? local.state : null
+      }
+    });
+    this.emit('event', Object.assign({ event: 'synced' }, this.snapshot()));
+    return { ok: true, driftMs, warning, snapshot: this.snapshot() };
+  }
+
+  async _alignLocal(filePath, playout, offsetMs) {
+    const loaded = await this.player.send('load', { path: filePath }, 30000).catch((error) => ({ ok: false, error: error.message }));
+    if (!loaded || loaded.ok === false) {
+      return { ok: false, error: `This Master could not open ${path.basename(filePath)}.` };
+    }
+    const rate = Number.isFinite(playout.rate) && playout.rate > 0 ? playout.rate : 1;
+    await this.player.send('setRate', { rate }, 5000).catch(() => null);
+    if (playout.state === 'paused') {
+      await this.player.send('seek', { seconds: playout.position }, 15000).catch(() => null);
+      await this.player.send('pause', {}, 5000).catch(() => null);
+      return { ok: true, driftMs: null };
+    }
+    if (mediaTypeFromPath(filePath) === 'video') {
+      await this.player.send('fullscreen', { enabled: true }, 10000).catch(() => null);
+    }
+    let latest = playout;
+    let driftMs = null;
+    // Start aligned, check, and correct once if needed. Each try uses a fresh
+    // Slave reading so a correction never compounds an earlier error.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const started = await this._startLocalAligned(latest, offsetMs);
+      if (!started.ok) return { ok: false, error: started.error };
+      await new Promise((resolve) => setTimeout(resolve, this.syncLeadMs() + 600));
+      driftMs = await this._measureDrift(offsetMs);
+      if (driftMs != null && Math.abs(driftMs) <= 20) break;
+      const fresh = await this._readSlavePlayout();
+      if (!fresh || fresh.state !== 'playing') break;
+      latest = fresh;
+    }
+    return { ok: true, driftMs };
   }
 
   /**
@@ -947,24 +1267,16 @@ class LinkController extends EventEmitter {
       return { ok: true, kept: true };
     }
     const mediaRoot = (this.config && this.config.data && this.config.data.mediaRoot) || '';
-    // Every Master row is kept, in order, so indexes match the Master. A row
-    // whose file is not on this Mac keeps the Master path and is marked missing.
-    const resolvedItems = (payload.playlist || []).map((entry) => {
-      const resolved = resolveSessionFile(entry, mediaRoot, (filePath) => {
-        try { return fs.existsSync(filePath); } catch (error) { return false; }
-      });
-      const found = resolved.ok && !!resolved.path;
-      const filePath = found ? resolved.path : String((entry && entry.path) || '');
-      return {
-        path: filePath,
-        name: (entry && entry.name) || filePath.split(/[/\\]/).pop(),
-        type: (entry && entry.type) || mediaTypeFromPath(filePath),
-        duration: !entry || entry.duration == null || !Number.isFinite(Number(entry.duration)) ? null : Number(entry.duration),
-        missing: !found
-      };
-    });
+    const resolvedItems = resolvePlaylistItems(payload.playlist, mediaRoot, fileExists)
+      .map((item) => Object.assign(item, { type: item.type || mediaTypeFromPath(item.path) }));
     const selectedIndex = Number.isInteger(payload.selectedIndex) ? payload.selectedIndex : payload.currentIndex;
     const showSession = (playerState) => {
+      // Kept here too, so a rejoining Master can read the list back with Sync.
+      this.publishSession({
+        playlist: resolvedItems,
+        currentIndex: Number.isInteger(selectedIndex) ? selectedIndex : null,
+        playAll: payload.playAll === true
+      });
       this.emit('event', {
         event: 'session',
         session: {
@@ -976,9 +1288,14 @@ class LinkController extends EventEmitter {
         }
       });
     };
-    const current = resolveSessionFile(payload.item, mediaRoot, (filePath) => {
-      try { return fs.existsSync(filePath); } catch (error) { return false; }
-    });
+    const current = resolveSessionFile(payload.item, mediaRoot, fileExists);
+    // A Master on another item (or none) does not own what is on air here, so
+    // it cannot replace this Slave's playlist either; Sync reads it back later.
+    const sameItem = current.ok && !current.idle && path.resolve(current.path) === path.resolve(local.path || '');
+    if (guarded && onAir && !sameItem) {
+      console.error(`[link] kept Slave ${local.status} on ${path.basename(local.path)}; Master is on ${current.ok && !current.idle ? path.basename(current.path) : 'another item'} (${options.reason || 'connect'})`);
+      return { ok: true, kept: true };
+    }
     if (!current.ok) {
       showSession(null);
       if (guarded) {
@@ -1067,6 +1384,11 @@ class LinkController extends EventEmitter {
     if (this.role !== 'master') return { ok: true, skipped: true };
     const paired = this.config && this.config.getPaired();
     if (!paired) return { ok: true, skipped: true, reason: 'not_paired' };
+    if (this.observing) return {
+        ok: false,
+        error: { code: 'OBSERVING', message: 'The Slave is on air. Press Sync to take over first.' },
+        snapshot: this.snapshot()
+      };
     const mediaRoot = this.config.data.mediaRoot || '';
     const relative = toRelativeMediaPath(mediaRoot, absolutePath);
     if (!relative.ok) {
@@ -1125,6 +1447,11 @@ class LinkController extends EventEmitter {
     if (this.role !== 'master') return { ok: true, skipped: true };
     const paired = this.config && this.config.getPaired();
     if (!paired) return { ok: true, skipped: true, reason: 'not_paired' };
+    if (this.observing) return {
+        ok: false,
+        error: { code: 'OBSERVING', message: 'The Slave is on air. Press Sync to take over first.' },
+        snapshot: this.snapshot()
+      };
     if (this.client.connectionState !== 'connected') {
       this._scheduleReconnect();
       return {
@@ -1276,6 +1603,8 @@ class LinkController extends EventEmitter {
 
   async shutdown() {
     this._closed = true;
+    this._stopHeartbeat();
+    this._setObserving(null, { quiet: true });
     this._pairAttempt += 1;
     this._pairRequestActive = false;
     this.autoReconnect = false;

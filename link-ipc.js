@@ -53,6 +53,7 @@ function registerLinkIpc({ ipcMain, BrowserWindow, link, onRole }) {
   ipcMain.handle('link:startPairedSession', () => link.startPairedSession());
   ipcMain.handle('link:publishSession', (_event, session) => link.publishSession(session));
   ipcMain.handle('link:recover', () => link.recoverAfterWake());
+  ipcMain.handle('link:syncWithSlave', () => link.syncWithSlave());
 }
 
 module.exports = { registerLinkIpc };

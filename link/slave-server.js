@@ -31,7 +31,10 @@ const PREEMPTING_COMMANDS = new Set(['stop', 'pause']);
  *   - pending pairRequest waits for UI Accept/Reject
  */
 class SlaveServer extends EventEmitter {
-  constructor({ player, host = '0.0.0.0', clock, scheduler, config, enforcePairing = false, openApp = null, trace = null } = {}) {
+  constructor({
+    player, host = '0.0.0.0', clock, scheduler, config, enforcePairing = false, openApp = null, trace = null,
+    describePlayout = null, silenceMs = 0
+  } = {}) {
     super();
     this.player = player;
     this.host = host;
@@ -59,6 +62,12 @@ class SlaveServer extends EventEmitter {
     this.remoteAddress = null;
     this.outbound = new Map();
     this.nextRequestId = 1;
+    // Read-only view of what this Slave is playing, for a Master that rejoins.
+    this.describePlayout = typeof describePlayout === 'function' ? describePlayout : null;
+    // A Master that sends heartbeats and then goes silent this long is gone,
+    // even if its Mac lost power and TCP never closed.
+    this.silenceMs = silenceMs > 0 ? silenceMs : 0;
+    this.silenceTimer = null;
   }
 
   mediaRoot() {
@@ -90,12 +99,31 @@ class SlaveServer extends EventEmitter {
         }
         this.server = server;
         this.port = address.port;
+        this._watchSilence();
         resolve({ port: this.port, host: this.host });
       });
     });
   }
 
+  _watchSilence() {
+    if (!this.silenceMs || this.silenceTimer) return;
+    this.silenceTimer = setInterval(() => {
+      const socket = this.client;
+      if (!socket || socket.destroyed || !socket.heartbeatSeen || !this._isAuthorized(socket)) return;
+      const quietMs = Date.now() - socket.lastLineAt;
+      if (quietMs <= this.silenceMs) return;
+      console.error(`[link] no word from the Master at ${peerEndpoint(socket)} for ${quietMs} ms; treating it as gone`);
+      socket.closeReason = `Master silent for ${quietMs} ms`;
+      socket.destroy();
+    }, 1000);
+    if (typeof this.silenceTimer.unref === 'function') this.silenceTimer.unref();
+  }
+
   stop() {
+    if (this.silenceTimer) {
+      clearInterval(this.silenceTimer);
+      this.silenceTimer = null;
+    }
     if (this.scheduler) this.scheduler.cancel();
     this._clearPendingPair('server_stopped');
     for (const socket of this.sockets) {
@@ -287,6 +315,7 @@ class SlaveServer extends EventEmitter {
           socket.traceFirstLine = true;
           if (this.trace) this.trace.stage('slave_first_line', `${line.length} chars`);
         }
+        socket.lastLineAt = Date.now();
         const answered = this._takeResponse(line, socket);
         if (answered) return;
         const receivedAt = this.clock.monotonicNow();
@@ -296,6 +325,16 @@ class SlaveServer extends EventEmitter {
           console.error(
             `[link] parse error from ${peerEndpoint(socket)}: ${parsed.code} — ${previewBytes(Buffer.from(String(line).slice(0, 200)))}`
           );
+        }
+        // Heartbeats and playout reads never wait behind a slow load.
+        if (parsed.ok && parsed.message.type === 'heartbeat') {
+          if (socket === this.client) socket.heartbeatSeen = true;
+          this._write(socket, success(parsed.message.requestId, { alive: true }));
+          return;
+        }
+        if (parsed.ok && parsed.message.type === 'getPlayout') {
+          this._respondPlayout(socket, parsed.message);
+          return;
         }
         if (parsed.ok && parsed.message.type === 'timeSync') {
           if (socket !== this.client || !this._isAuthorized(socket)) {
@@ -410,6 +449,29 @@ class SlaveServer extends EventEmitter {
     if (!current || current !== this.client) return false;
     if (!this.enforcePairing) return true;
     return typeof current.authorizedDeviceId === 'string' && current.authorizedDeviceId.length > 0;
+  }
+
+  _respondPlayout(socket, message) {
+    if (socket !== this.client || !this._isAuthorized(socket)) {
+      this._write(socket, failure(message.requestId, 'NOT_AUTHORIZED', 'This Master is not paired with this Slave.'));
+      return;
+    }
+    if (!this.describePlayout) {
+      this._write(socket, failure(message.requestId, 'UNKNOWN_COMMAND', 'This Slave cannot describe its playout.'));
+      return;
+    }
+    Promise.resolve()
+      .then(() => this.describePlayout())
+      .then((result) => {
+        if (result && result.ok) this._write(socket, success(message.requestId, result.payload));
+        else {
+          const error = (result && result.error) || { code: 'STATE_UNAVAILABLE', message: 'The Slave could not read its player.' };
+          this._write(socket, failure(message.requestId, error.code, error.message));
+        }
+      })
+      .catch((error) => {
+        this._write(socket, failure(message.requestId, 'STATE_UNAVAILABLE', error.message));
+      });
   }
 
   _respondTimeSync(socket, message, receivedAt, receivedWall) {

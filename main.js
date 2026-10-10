@@ -141,7 +141,10 @@ app.whenReady().then(async () => {
     ipcMain,
     BrowserWindow,
     session,
-    isLocked: () => link.role === 'slave' && link.masterConnected === true && !!link.authorizedOnSlave()
+    isLocked: () => {
+      if (link.role === 'slave') return link.masterConnected === true && !!link.authorizedOnSlave();
+      return link.observing || link.syncing ? 'The Slave is on air. Press Sync to join it and take control.' : false;
+    }
   });
   registerLinkIpc({
     ipcMain,

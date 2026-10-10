@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     startPairedSession: () => ipcRenderer.invoke('link:startPairedSession'),
     publishSession: (session) => ipcRenderer.invoke('link:publishSession', session),
     recover: () => ipcRenderer.invoke('link:recover'),
+    syncWithSlave: () => ipcRenderer.invoke('link:syncWithSlave'),
     onEvent: (callback) => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event, payload) => callback(payload);

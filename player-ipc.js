@@ -160,11 +160,13 @@ function registerPlayerIpc({ ipcMain, BrowserWindow, session, isLocked = () => f
 
   // Transport from this window is refused while a Master drives this Slave.
   function locked() {
-    return isLocked() ? { ok: false, locked: true, error: LOCKED_MESSAGE } : null;
+    const reason = isLocked();
+    if (!reason) return null;
+    return { ok: false, locked: true, error: typeof reason === 'string' ? reason : LOCKED_MESSAGE };
   }
 
   ipcMain.handle('player:load', (_event, filePath) => {
-    if (isLocked()) return locked();
+    if (locked()) return locked();
     const error = mediaPathError(filePath);
     if (error) return { ok: false, error };
     return attempt(() => session.send('load', { path: filePath }, 30000));
@@ -175,14 +177,14 @@ function registerPlayerIpc({ ipcMain, BrowserWindow, session, isLocked = () => f
   ipcMain.handle('player:stop', () => locked() || attempt(() => session.send('stop')));
 
   ipcMain.handle('player:seek', (_event, seconds) => {
-    if (isLocked()) return locked();
+    if (locked()) return locked();
     const error = secondsError(seconds);
     if (error) return { ok: false, error };
     return attempt(() => session.send('seek', { seconds: Number(seconds) }));
   });
 
   ipcMain.handle('player:setRate', (_event, rate) => {
-    if (isLocked()) return locked();
+    if (locked()) return locked();
     const error = rateError(rate);
     if (error) return { ok: false, error };
     return attempt(() => session.send('setRate', { rate: Number(rate) }));

@@ -92,7 +92,28 @@ function resolveSessionFile(item, mediaRoot, exists) {
   return { ok: false, reason: 'The master file is not on this Mac.' };
 }
 
+/**
+ * Every row of the other Mac's playlist, in order, as files on this Mac. A row
+ * whose file is not here keeps the other Mac's path and is marked missing, so
+ * indexes still match.
+ */
+function resolvePlaylistItems(playlist, mediaRoot, exists) {
+  return (Array.isArray(playlist) ? playlist : []).map((entry) => {
+    const resolved = resolveSessionFile(entry, mediaRoot, exists);
+    const found = resolved.ok && !!resolved.path;
+    const filePath = found ? resolved.path : String((entry && entry.path) || '');
+    return {
+      path: filePath,
+      name: (entry && entry.name) || fileName(filePath),
+      type: (entry && entry.type) || null,
+      duration: !entry || entry.duration == null || !Number.isFinite(Number(entry.duration)) ? null : Number(entry.duration),
+      missing: !found
+    };
+  });
+}
+
 module.exports = {
   masterSessionPayload,
-  resolveSessionFile
+  resolveSessionFile,
+  resolvePlaylistItems
 };

@@ -26,7 +26,9 @@ const LINK_COMMANDS = new Set([
   'timeSync',
   'scheduledPlay',
   'getSession',
-  'sessionSync'
+  'sessionSync',
+  'getPlayout',
+  'heartbeat'
 ]);
 
 /** Commands that require an authorized (paired) master when pairing is enforced. */

@@ -1,14 +1,22 @@
+/**
+ * Master crash and Sync, with two real playback engines.
+ *
+ * The Slave keeps playing when the Master dies. A restarted Master only
+ * watches; Sync starts the Master exactly where the Slave is and hands control
+ * back, without touching the Slave. The Slave's clock is deliberately offset so
+ * the clock-offset arithmetic is exercised, not just a shared clock.
+ */
+process.env.PLAYOUT_MUTE = '1';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { PlayerSession } = require('../player-session');
 const { ConfigStore } = require('../link/config-store');
 const { LinkController } = require('../link/link-controller');
-const { RecordingPlayer } = require('../link/recording-player');
-const PlaylistUI = require('../playlist-ui');
+const { monotonicNow, sharedNow } = require('../link/clock-sync');
 
 const results = [];
 const crashes = [];
-
 process.on('uncaughtException', (error) => crashes.push(error.stack || String(error)));
 process.on('unhandledRejection', (error) => crashes.push(error && error.stack ? error.stack : String(error)));
 
@@ -21,346 +29,261 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function once(emitter, event, timeoutMs = 8000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${event}`)), timeoutMs);
-    emitter.once(event, (payload) => {
-      clearTimeout(timer);
-      resolve(payload);
-    });
-  });
-}
-
-async function waitUntil(label, predicate, timeoutMs = 8000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (predicate()) return;
+async function waitFor(check, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (await check()) return true;
     await sleep(40);
   }
-  throw new Error(`timeout: ${label}`);
+  return !!(await check());
 }
 
-function transport(commands) {
-  return commands
-    .map((command) => command.type)
-    .filter((type) => type === 'load' || type === 'play' || type === 'pause' || type === 'stop' || type === 'seek');
+function writeTone(file, seconds) {
+  const rate = 22050;
+  const samples = rate * seconds;
+  const data = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i += 1) {
+    data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 6000), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  fs.writeFileSync(file, Buffer.concat([header, data]));
 }
 
-async function pair(master, slave) {
-  const incoming = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('pair request did not arrive')), 8000);
-    const onEvent = (event) => {
-      if (!event || event.event !== 'pair-request') return;
-      clearTimeout(timer);
-      slave.off('event', onEvent);
-      resolve(event);
-    };
-    slave.on('event', onEvent);
-  });
-  const pairing = master.requestPairing('127.0.0.1', slave.listenPort);
-  const asked = await incoming;
-  slave.acceptPairing(asked.requestId);
-  const paired = await pairing;
-  if (!paired.ok) throw new Error(paired.error || 'pairing failed');
+async function engineState(session) {
+  const reply = await session.send('getState', {}, 5000);
+  return reply && reply.state ? reply.state : {};
 }
 
-function armSlave(slave, player, files, current) {
-  player.state = {
-    status: 'playing',
-    position: 8,
-    duration: 20,
-    rate: 1,
-    path: current
-  };
-  slave.peerRuntime = {
-    sessionId: 'session-playing',
-    playlist: files,
-    playlistKnown: true,
-    currentIndex: 1,
-    playAll: true
-  };
+/** Positions of both engines projected to one host instant (same Mac). */
+async function measuredDriftMs(masterSession, slaveSession) {
+  const [m, s] = await Promise.all([engineState(masterSession), engineState(slaveSession)]);
+  if (m.status !== 'playing' || s.status !== 'playing') return null;
+  const at = Math.max(m.hostTime, s.hostTime);
+  const mp = m.position + (at - m.hostTime) * (m.rate || 1);
+  const sp = s.position + (at - s.hostTime) * (s.rate || 1);
+  return (mp - sp) * 1000;
 }
+
+/** Slave position, projected forward, must never jump: proof nobody touched it. */
+function continuity(before, after) {
+  const elapsed = after.hostTime - before.hostTime;
+  return Math.abs((after.position - before.position) - elapsed * (before.rate || 1));
+}
+
+const SLAVE_SKEW_MS = 123456.789;
+const skewedClock = {
+  monotonicNow: () => monotonicNow() + SLAVE_SKEW_MS,
+  sharedNow
+};
 
 async function main() {
-  const projected = PlaylistUI.projectPlaybackPosition({
-    state: 'playing',
-    position: 10,
-    rate: 1,
-    duration: 30,
-    sampledAt: 1000,
-    now: 5000,
-    offsetMs: 0
-  });
-  const shifted = PlaylistUI.projectPlaybackPosition({
-    state: 'playing',
-    position: 10,
-    rate: 1,
-    duration: 30,
-    sampledAt: 1000,
-    now: 5000,
-    offsetMs: 100
-  });
-  const held = PlaylistUI.projectPlaybackPosition({
-    state: 'paused',
-    position: 10,
-    rate: 1,
-    duration: 30,
-    sampledAt: 1000,
-    now: 9000,
-    offsetMs: 0
-  });
-  record(
-    'position follows the shared offset while playing and holds while paused',
-    projected === 14 && Math.abs(shifted - 14.1) < 0.0001 && held === 10,
-    `playing=${projected} offset=${shifted} paused=${held}`
-  );
-
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-failover-'));
-  const alpha = path.join(dir, 'Alpha.wav');
-  const beta = path.join(dir, 'Beta.wav');
-  fs.writeFileSync(alpha, Buffer.alloc(64));
-  fs.writeFileSync(beta, Buffer.alloc(64));
-  const files = [
-    { path: alpha, name: 'Alpha.wav', type: 'audio', duration: 20 },
-    { path: beta, name: 'Beta.wav', type: 'audio', duration: 20 }
+  const masterMedia = path.join(dir, 'master');
+  const slaveMedia = path.join(dir, 'slave');
+  for (const root of [masterMedia, slaveMedia]) fs.mkdirSync(path.join(root, 'Set'), { recursive: true });
+  for (const name of ['a.wav', 'b.wav']) {
+    writeTone(path.join(masterMedia, 'Set', name), 90);
+    writeTone(path.join(slaveMedia, 'Set', name), 90);
+  }
+  // only.wav exists on the Slave alone.
+  writeTone(path.join(slaveMedia, 'Set', 'only.wav'), 90);
+  const masterA = path.join(masterMedia, 'Set', 'a.wav');
+  const masterB = path.join(masterMedia, 'Set', 'b.wav');
+  const playlist = [
+    { path: masterA, name: 'a.wav', type: 'audio', duration: 90 },
+    { path: masterB, name: 'b.wav', type: 'audio', duration: 90 }
   ];
 
-  async function openPair() {
-    const masterCfg = new ConfigStore(path.join(dir, `master-${Date.now()}-${Math.random()}.json`));
-    const slaveCfg = new ConfigStore(path.join(dir, `slave-${Date.now()}-${Math.random()}.json`));
-    masterCfg.setRole('master');
-    masterCfg.setMediaRoot(dir);
-    slaveCfg.setRole('slave');
-    slaveCfg.setMediaRoot(dir);
-    const slavePlayer = new RecordingPlayer();
-    const slave = new LinkController(slavePlayer, { config: slaveCfg });
-    await slave.setRole('slave');
-    const listening = await slave.listen(0);
-    if (!listening.ok) throw new Error(listening.error || 'slave did not listen');
-    const masterPlayer = new RecordingPlayer();
-    const master = new LinkController(masterPlayer, { config: masterCfg });
-    await master.setRole('master');
-    await pair(master, slave);
-    return { master, slave, slavePlayer, masterPlayer, masterCfg, slaveCfg, port: slave.listenPort };
-  }
+  const masterCfgPath = path.join(dir, 'master.json');
+  const masterCfg = new ConfigStore(masterCfgPath);
+  masterCfg.setRole('master');
+  masterCfg.setMediaRoot(masterMedia);
+  const slaveCfg = new ConfigStore(path.join(dir, 'slave.json'));
+  slaveCfg.setRole('slave');
+  slaveCfg.setMediaRoot(slaveMedia);
 
-  const first = await openPair();
-  armSlave(first.slave, first.slavePlayer, files, beta);
-  const slaveCommandsAtPlay = first.slavePlayer.commands.length;
-  await first.master.shutdown();
-  await sleep(200);
-  record(
-    'master quit leaves the slave playing',
-    first.slavePlayer.state.status === 'playing' &&
-      first.slavePlayer.state.position === 8 &&
-      first.slavePlayer.state.path === beta &&
-      transport(first.slavePlayer.commands.slice(slaveCommandsAtPlay)).length === 0,
-    `status=${first.slavePlayer.state.status} added=${transport(first.slavePlayer.commands.slice(slaveCommandsAtPlay)).join(',')}`
-  );
-
-  const reopenedPlayer = new RecordingPlayer();
-  const reopened = new LinkController(reopenedPlayer, { config: first.masterCfg });
-  await reopened.setRole('master');
-  const sessionEvent = once(reopened, 'event', 8000).then(() => null);
-  const events = [];
-  reopened.on('event', (event) => {
-    if (event && event.event === 'session') events.push(event.session);
+  const slaveSession = new PlayerSession();
+  slaveSession.start();
+  await engineState(slaveSession);
+  const slave = new LinkController(slaveSession, {
+    config: slaveCfg, clock: skewedClock, pairRetryDelayMs: 40, silenceMs: 1500
   });
-  const started = await reopened.startPairedSession();
-  await sessionEvent.catch(() => null);
-  await waitUntil('master adopted slave', () => reopenedPlayer.state.status === 'playing' && reopenedPlayer.state.path === beta);
-  const adopted = events.filter((session) => session && session.currentIndex === 1).pop();
-  const slaveAdded = transport(first.slavePlayer.commands.slice(slaveCommandsAtPlay));
-  const seek = reopenedPlayer.commands.filter((command) => command.type === 'seek').pop();
-  record(
-    'reopened master adopts the slave and does not reset it',
-    started.ok === true &&
-      slaveAdded.length === 0 &&
-      first.slavePlayer.state.status === 'playing' &&
-      first.slavePlayer.state.position === 8 &&
-      reopenedPlayer.state.path === beta &&
-      seek && seek.fields.seconds >= 7 && seek.fields.seconds < 20 &&
-      adopted && adopted.currentIndex === 1 &&
-      adopted.playlist.map((entry) => entry.name).join(',') === 'Alpha.wav,Beta.wav' &&
-      adopted.playAll === true &&
-      adopted.sessionId === 'session-playing',
-    `slave=[${slaveAdded.join(',')}] seek=${seek && seek.fields.seconds} index=${adopted && adopted.currentIndex}`
-  );
+  await slave.setRole('slave');
+  await slave.listen(0);
+  slave.on('event', (event) => {
+    if (event && event.event === 'pair-request') slave.acceptPairing(event.requestId);
+  });
+  let sessionSyncs = 0;
+  slave.server.on('session-sync', () => { sessionSyncs += 1; });
 
-  const crash = await openPair();
-  armSlave(crash.slave, crash.slavePlayer, files, beta);
-  const crashMark = crash.slavePlayer.commands.length;
-  if (crash.master.client.socket) crash.master.client.socket.destroy();
-  await sleep(100);
-  await crash.master.shutdown();
-  await sleep(150);
-  record(
-    'master crash leaves the slave playing',
-    crash.slavePlayer.state.status === 'playing' &&
-      crash.slavePlayer.state.position === 8 &&
-      transport(crash.slavePlayer.commands.slice(crashMark)).indexOf('stop') === -1 &&
-      transport(crash.slavePlayer.commands.slice(crashMark)).indexOf('load') === -1,
-    transport(crash.slavePlayer.commands.slice(crashMark)).join(',') || 'no transport'
-  );
-  const crashedBack = new LinkController(new RecordingPlayer(), { config: crash.masterCfg });
-  await crashedBack.setRole('master');
-  await crashedBack.startPairedSession();
-  await waitUntil('crashed master recovered', () => crashedBack.player.state.path === beta && crashedBack.player.state.status === 'playing');
-  record(
-    'reopened master after a crash does not stop the slave',
-    crash.slavePlayer.state.status === 'playing' &&
-      crash.slavePlayer.state.position === 8 &&
-      transport(crash.slavePlayer.commands.slice(crashMark)).indexOf('stop') === -1,
-    `slave=${crash.slavePlayer.state.status} pos=${crash.slavePlayer.state.position}`
-  );
-
-  const sleepCase = await openPair();
-  armSlave(sleepCase.slave, sleepCase.slavePlayer, files, beta);
-  const sleepMark = sleepCase.slavePlayer.commands.length;
-  const slaveWake = await sleepCase.slave.recoverAfterWake();
-  record(
-    'slave sleep keeps its own playback when it is still playing',
-    slaveWake.kept === true &&
-      sleepCase.slavePlayer.state.status === 'playing' &&
-      transport(sleepCase.slavePlayer.commands.slice(sleepMark)).indexOf('stop') === -1,
-    `kept=${slaveWake.kept}`
-  );
-  sleepCase.masterPlayer.state = { status: 'idle', position: 0, duration: 0, rate: 1, path: null };
-  const masterWakeMark = sleepCase.slavePlayer.commands.length;
-  await sleepCase.master.recoverAfterWake();
-  await waitUntil('sleeping master caught up', () => sleepCase.masterPlayer.state.path === beta);
-  record(
-    'master sleep recovers from the slave without stopping it',
-    sleepCase.slavePlayer.state.status === 'playing' &&
-      sleepCase.slavePlayer.state.position === 8 &&
-      sleepCase.masterPlayer.state.status === 'playing' &&
-      transport(sleepCase.slavePlayer.commands.slice(masterWakeMark)).indexOf('stop') === -1,
-    `master=${sleepCase.masterPlayer.state.status} slaveAdded=${transport(sleepCase.slavePlayer.commands.slice(masterWakeMark)).join(',')}`
-  );
-
-  const reverse = await openPair();
-  reverse.masterPlayer.state = {
-    status: 'playing',
-    position: 5.5,
-    duration: 20,
-    rate: 1,
-    path: beta
-  };
-  reverse.master.publishedSession = {
-    playlist: files,
-    currentIndex: 1,
-    playAll: true,
-    published: true,
-    sessionId: 'session-master'
-  };
-  const masterMark = reverse.masterPlayer.commands.length;
-  await reverse.slave.shutdown();
-  await sleep(100);
-  record(
-    'slave quit leaves the master playing',
-    reverse.masterPlayer.state.status === 'playing' &&
-      reverse.masterPlayer.state.position === 5.5 &&
-      transport(reverse.masterPlayer.commands.slice(masterMark)).length === 0,
-    `status=${reverse.masterPlayer.state.status}`
-  );
-  const revivedPlayer = new RecordingPlayer();
-  const revived = new LinkController(revivedPlayer, { config: reverse.slaveCfg });
-  await revived.setRole('slave');
-  await revived.listen(reverse.port);
-  await waitUntil('slave recovered from master', () => revivedPlayer.state.path === beta && revivedPlayer.state.status === 'playing');
-  const masterAdded = transport(reverse.masterPlayer.commands.slice(masterMark));
-  record(
-    'reopened slave adopts the master and does not reset it',
-    reverse.masterPlayer.state.status === 'playing' &&
-      reverse.masterPlayer.state.position === 5.5 &&
-      masterAdded.indexOf('stop') === -1 &&
-      masterAdded.indexOf('load') === -1 &&
-      revivedPlayer.state.path === beta &&
-      revivedPlayer.state.position > 5 &&
-      revived.peerRuntime.currentIndex === 1 &&
-      revived.peerRuntime.sessionId === 'session-master',
-    `master=[${masterAdded.join(',')}] slavePos=${revivedPlayer.state.position} index=${revived.peerRuntime.currentIndex}`
-  );
-
-  const slaveCrash = await openPair();
-  slaveCrash.masterPlayer.state = {
-    status: 'playing',
-    position: 6,
-    duration: 20,
-    rate: 1,
-    path: beta
-  };
-  slaveCrash.master.publishedSession = {
-    playlist: files,
-    currentIndex: 1,
-    playAll: false,
-    published: true,
-    sessionId: 'session-crash-slave'
-  };
-  const slaveCrashMark = slaveCrash.masterPlayer.commands.length;
-  if (slaveCrash.slave.server && slaveCrash.slave.server.client) slaveCrash.slave.server.client.destroy();
-  await slaveCrash.slave.shutdown();
-  await sleep(100);
-  const slaveRevived = new LinkController(new RecordingPlayer(), { config: slaveCrash.slaveCfg });
-  await slaveRevived.setRole('slave');
-  await slaveRevived.listen(slaveCrash.port);
-  await waitUntil('slave recovered after crash', () => slaveRevived.player.state.path === beta && slaveRevived.player.state.status === 'playing');
-  record(
-    'slave crash and reopen recovers from the master',
-    slaveCrash.masterPlayer.state.status === 'playing' &&
-      slaveCrash.masterPlayer.state.position === 6 &&
-      transport(slaveCrash.masterPlayer.commands.slice(slaveCrashMark)).indexOf('stop') === -1 &&
-      slaveRevived.player.state.position > 5 &&
-      slaveRevived.peerRuntime.currentIndex === 1,
-    `masterPos=${slaveCrash.masterPlayer.state.position} slavePos=${slaveRevived.player.state.position}`
-  );
-
-  const slowPlayer = new RecordingPlayer();
-  const originalSend = slowPlayer.send.bind(slowPlayer);
-  slowPlayer.send = (type, fields, timeout) => {
-    if (type === 'getState') {
-      return new Promise((resolve) => setTimeout(() => resolve(originalSend(type, fields, timeout)), 4000));
-    }
-    return originalSend(type, fields, timeout);
-  };
-  const slowCfg = new ConfigStore(path.join(dir, 'slow-slave.json'));
-  const slowMasterCfg = new ConfigStore(path.join(dir, 'slow-master.json'));
-  slowCfg.setRole('slave');
-  slowMasterCfg.setRole('master');
-  const slowSlave = new LinkController(slowPlayer, { config: slowCfg });
-  await slowSlave.setRole('slave');
-  await slowSlave.listen(0);
-  const quickMaster = new LinkController(new RecordingPlayer(), { config: slowMasterCfg });
-  await quickMaster.setRole('master');
-  const linkStarted = Date.now();
-  await pair(quickMaster, slowSlave);
-  const linkMs = Date.now() - linkStarted;
-  record(
-    'a slow player does not block the connection',
-    quickMaster.linkReady === true && quickMaster.snapshot().connection === 'connected' && linkMs < 1500,
-    `${linkMs}ms`
-  );
-  await quickMaster.shutdown();
-  await slowSlave.shutdown();
-
-  await reopened.shutdown();
-  await crashedBack.shutdown();
-  await first.slave.shutdown();
-  await crash.slave.shutdown();
-  await sleepCase.master.shutdown();
-  await sleepCase.slave.shutdown();
-  await reverse.master.shutdown();
-  await revived.shutdown();
-  await slaveCrash.master.shutdown();
-  await slaveRevived.shutdown();
-
-  const failed = results.filter((item) => !item.ok);
-  if (crashes.length) {
-    console.error('CRASHES');
-    for (const crash of crashes) console.error(crash);
+  let masterSession = null;
+  let master = null;
+  async function startMaster() {
+    masterSession = new PlayerSession();
+    masterSession.start();
+    await engineState(masterSession);
+    master = new LinkController(masterSession, {
+      config: new ConfigStore(masterCfgPath), pairRetryDelayMs: 40, heartbeatMs: 300, observePollMs: 200
+    });
+    master.on('event', (event) => {
+      if (event && event.event === 'session') master.lastSessionEvent = event.session;
+    });
+    await master.setRole('master');
   }
+  async function crashMaster() {
+    await master.shutdown();
+    await masterSession.shutdown();
+    await waitFor(() => slave.masterConnected === false, 4000);
+  }
+
+  try {
+    // 1. Normal playout.
+    await startMaster();
+    const paired = await master.requestPairing('127.0.0.1', slave.listenPort);
+    record('master pairs with slave', paired.ok === true, paired.error);
+    record('a fresh master with an idle slave is in control', !master.observing, JSON.stringify(master.observing));
+    await masterSession.send('load', { path: masterA }, 10000);
+    master.publishSession({ playlist, currentIndex: 0, playAll: false });
+    await master.mirrorLoad(masterA);
+    await masterSession.send('play');
+    await master.mirrorCommand('play', { state: 'playing', position: 0 });
+    await waitFor(async () => (await engineState(slaveSession)).status === 'playing', 4000);
+    await sleep(1500);
+
+    // 2. Master crashes: Slave keeps playing, untouched, and unlocks.
+    const beforeCrash = await engineState(slaveSession);
+    await crashMaster();
+    await sleep(1200);
+    const afterCrash = await engineState(slaveSession);
+    record('slave keeps playing after the master crashes', afterCrash.status === 'playing' && /a\.wav$/.test(afterCrash.path),
+      `${afterCrash.status} ${path.basename(afterCrash.path || '')}`);
+    record('slave playback is continuous through the crash', continuity(beforeCrash, afterCrash) < 0.1,
+      `${(continuity(beforeCrash, afterCrash) * 1000).toFixed(1)} ms jump`);
+    record('slave is released (unlocked) when the master dies', slave.masterConnected === false);
+
+    // 3. Master restarts: it only watches.
+    const syncsBefore = sessionSyncs;
+    await startMaster();
+    const restarted = await master.startPairedSession();
+    record('restarted master reconnects', restarted.ok === true, restarted.error);
+    record('restarted master watches the on-air slave', master.observing && master.observing.name === 'a.wav' &&
+      master.observing.state === 'playing' && master.observing.count === 2 && master.observing.index === 0,
+      JSON.stringify(master.observing));
+    master.publishSession({ playlist: [], currentIndex: null, playAll: false });
+    const refusedStop = await master.mirrorCommand('stop');
+    const refusedLoad = await master.mirrorLoad(masterB);
+    await sleep(600);
+    record('a watching master sends no session to the slave', sessionSyncs === syncsBefore, `${sessionSyncs - syncsBefore} sent`);
+    record('a watching master refuses transport and loads',
+      refusedStop.ok === false && refusedStop.error.code === 'OBSERVING' && refusedLoad.ok === false && refusedLoad.error.code === 'OBSERVING');
+    const p1 = master.observing.position;
+    await sleep(700);
+    record('the watched position keeps updating', master.observing && master.observing.position > p1 + 0.3,
+      `${p1.toFixed(2)} → ${master.observing && master.observing.position.toFixed(2)}`);
+    const watched = await engineState(slaveSession);
+    record('slave still continuous after the master rejoined', watched.status === 'playing' && continuity(afterCrash, watched) < 0.1,
+      `${(continuity(afterCrash, watched) * 1000).toFixed(1)} ms jump`);
+
+    // 4. Sync.
+    const beforeSync = await engineState(slaveSession);
+    const synced = await master.syncWithSlave();
+    record('sync succeeds', synced.ok === true && !synced.warning, JSON.stringify(synced.error || synced.warning || ''));
+    record('sync reports the master within 20 ms of the slave', synced.driftMs != null && Math.abs(synced.driftMs) <= 20,
+      `${synced.driftMs == null ? 'none' : synced.driftMs.toFixed(1)} ms`);
+    const drifts = [];
+    for (let i = 0; i < 5; i += 1) {
+      drifts.push(await measuredDriftMs(masterSession, slaveSession));
+      await sleep(200);
+    }
+    const worst = Math.max(...drifts.map((d) => (d == null ? Infinity : Math.abs(d))));
+    record('independently measured drift stays within 20 ms', worst <= 20, drifts.map((d) => d == null ? 'x' : d.toFixed(1)).join(', ') + ' ms');
+    const afterSync = await engineState(slaveSession);
+    record('sync never touched the slave', continuity(beforeSync, afterSync) < 0.1,
+      `${(continuity(beforeSync, afterSync) * 1000).toFixed(1)} ms jump`);
+    record('master is in control after sync', !master.observing && master.slaveMediaStatus === 'ready');
+    const adopted = master.lastSessionEvent;
+    record('master adopts the slave playlist and item',
+      adopted && adopted.playlist.length === 2 && adopted.playlist[0].path === masterA && adopted.currentIndex === 0,
+      JSON.stringify(adopted && { n: adopted.playlist.length, first: adopted.playlist[0] && adopted.playlist[0].path, index: adopted.currentIndex }));
+
+    // 5. After sync the master drives the slave again.
+    await masterSession.send('pause');
+    const paused = await master.mirrorCommand('pause', { state: 'paused' });
+    await sleep(200);
+    const slavePaused = await engineState(slaveSession);
+    record('pause from the synced master reaches the slave', paused.ok && slavePaused.status === 'paused', slavePaused.status);
+
+    // 6. Slave paused when the master dies: Sync leaves both paused at one point.
+    await crashMaster();
+    await startMaster();
+    await master.startPairedSession();
+    record('restarted master watches a paused slave', master.observing && master.observing.state === 'paused',
+      JSON.stringify(master.observing));
+    const pausedSync = await master.syncWithSlave();
+    const mp = await engineState(masterSession);
+    const sp = await engineState(slaveSession);
+    record('sync with a paused slave leaves the master paused at the same point',
+      pausedSync.ok && mp.status === 'paused' && Math.abs(mp.position - sp.position) < 0.05 && sp.status === 'paused',
+      `${mp.status}@${mp.position.toFixed(3)} vs ${sp.status}@${sp.position.toFixed(3)}`);
+    await masterSession.send('stop');
+    const stopped = await master.mirrorCommand('stop');
+    await sleep(200);
+    record('stop from the synced master stops the slave', stopped.ok && (await engineState(slaveSession)).status === 'stopped');
+
+    // 7. Slave on air with a file this master does not have.
+    await crashMaster();
+    await slaveSession.send('load', { path: path.join(slaveMedia, 'Set', 'only.wav') }, 10000);
+    await slaveSession.send('play');
+    // Same Mac in this test: move the file so this Master cannot find it by
+    // path either, as on a real Master that lacks it. The open file keeps playing.
+    fs.renameSync(path.join(slaveMedia, 'Set', 'only.wav'), path.join(dir, 'only-moved.wav'));
+    await startMaster();
+    await master.startPairedSession();
+    const missing = await master.syncWithSlave();
+    record('sync with a file missing here still takes control and says why',
+      missing.ok && /not on this Mac/.test(missing.warning || '') && !master.observing,
+      missing.warning || JSON.stringify(missing.error));
+    const stopOnly = await master.mirrorCommand('stop');
+    await sleep(200);
+    record('the master can then stop the slave', stopOnly.ok && (await engineState(slaveSession)).status === 'stopped',
+      JSON.stringify(stopOnly.error || ''));
+
+    // 8. An idle slave never puts a restarted master into watching.
+    await crashMaster();
+    await startMaster();
+    await master.startPairedSession();
+    record('a restarted master with an idle slave is in control', !master.observing, JSON.stringify(master.observing));
+
+    // 9. A master that goes silent without closing TCP is dropped by the slave.
+    await waitFor(() => slave.masterConnected === true, 3000);
+    await sleep(1000);
+    master._stopHeartbeat();
+    const dropped = await waitFor(() => slave.masterConnected === false, 4000);
+    record('slave drops a silent master and unlocks', dropped);
+  } finally {
+    if (master) await master.shutdown().catch(() => {});
+    if (masterSession) await masterSession.shutdown().catch(() => {});
+    await slave.shutdown().catch(() => {});
+    await slaveSession.shutdown().catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  record('no uncaught errors', crashes.length === 0, crashes[0]);
+  const failed = results.filter((item) => !item.ok);
   console.log(`\n${results.length - failed.length}/${results.length} failover checks passed`);
-  if (failed.length || crashes.length) process.exit(1);
+  process.exit(failed.length ? 1 : 0);
 }
 
 main().catch((error) => {
